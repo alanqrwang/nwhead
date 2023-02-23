@@ -1,5 +1,5 @@
 # Code for "A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification" (TMLR 2023)
-This repository contains training and evaluation code for the NW head, an interpretable, nonparametric classification head which can be used with any neural network.
+Repository containing training and evaluation code for the NW head -- an interpretable, nonparametric classification head which can be used with any neural network.
 
 [link to paper](https://arxiv.org/abs/2212.03411)
 
@@ -51,14 +51,12 @@ def support_influence(softmaxes, qlabels, sweights, slabels):
   sweights: Weights between query and each support (bs, num_support)
   slabels: One-hot encoded support label (bs, num_support, num_classes)
   '''
-  # assert len(softmaxes) == 1
   batch_influences = []
   bs = len(softmaxes)
   for bid in range(bs):
     softmax = softmaxes[bid]
     qlabel = qlabels[bid]
     sweight = sweights[bid]
-    # slabels = slabels[bid]
 
     qlabel_cat = qlabel.argmax(-1).item()
     slabels_cat = slabels.argmax(-1)
@@ -85,11 +83,11 @@ python train.py \
   --scheduler_milestones 20000 30000 \ # Epoch milestones to decrease lr via scheduler
   --embed_dim 128 \ # Embedding dimension, $d$ in paper
   --num_steps_per_epoch 32 \ # Number of gradient steps per training epoch
-  --num_val_steps_per_epoch 32 \ # Number of gradient steps per validation epoch
+  --num_val_steps_per_epoch 32  # Number of gradient steps per validation epoch
 ```
-These hyperparameters are probably not optimal. Notably, num_epochs could probably be reduced with appropriate adjustments to lr scheduler. Your mileage may vary on different datasets.
+These hyperparameters are probably not optimal. Notably, `num_epochs` could probably be reduced with appropriate adjustments to the learning rate scheduler. Your mileage may vary on different datasets.
 
-Command for training FC head with paper's hyperparameters:
+Command for training (baseline) FC head with paper's hyperparameters:
 ```
 python train.py \
   --models_dir out/ \ # Directory to save model outputs
@@ -100,7 +98,7 @@ python train.py \
   --lr 1e-1 \
   --num_epochs 200 \
   --scheduler_milestones 100 150 \ # Epoch milestones to decrease lr via scheduler
-  --embed_dim 0 \ # Embedding dimension, $d$ in paper. 0 indicates no projection.
+  --embed_dim 0  # Embedding dimension, $d$ in paper. 0 indicates no projection.
 ```
 
 ## Evaluation
@@ -116,9 +114,8 @@ python eval.py \
   --test_batch_size 4 \
   --seed 1 \
   --embed_dim 128 \
-  --recompute_embeddings \
 ```
-The code is set to build a 
+Toggle the command `--recompute_embeddings` or `--no_recompute_embeddings` to skip recomputing embeddings each time.
 
 ## Requirements
 This code was run and tested on an Nvidia A6000 GPU with the following dependencies:

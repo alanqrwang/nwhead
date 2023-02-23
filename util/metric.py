@@ -29,14 +29,12 @@ def support_influence(softmaxes, qlabels, sweights, slabels):
   sweights: Weights between query and each support (bs, num_support)
   slabels: One-hot encoded support label (bs, num_support, num_classes)
   '''
-  # assert len(softmaxes) == 1
   batch_influences = []
   bs = len(softmaxes)
   for bid in range(bs):
     softmax = softmaxes[bid]
     qlabel = qlabels[bid]
     sweight = sweights[bid]
-    # slabels = slabels[bid]
 
     qlabel_cat = qlabel.argmax(-1).item()
     slabels_cat = slabels.argmax(-1)
