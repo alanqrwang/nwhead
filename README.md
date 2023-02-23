@@ -1,6 +1,6 @@
 # Code for "A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification" (TMLR 2023)
 Repository containing training and evaluation code for the NW head -- an interpretable, nonparametric classification head which can be used with any neural network.
-
+![Architecture](figs/arch.png)
 [link to paper](https://arxiv.org/abs/2212.03411)
 
 ## NW Head
@@ -36,6 +36,9 @@ class NWHead(nn.Module):
 
 An example of usage in a CNN can be found in `model/net.py`.
 
+In particular, the ranking support images by the `scores` variable enables sorting the support images by highest simiarity, as in this figure:
+![Similarities](figs/weights.png)
+
 ## Support influence
 The NW head naturally lends itself to a notion of “support influence" (Section 3.4 in the paper) which finds the most helpful and most harmful examples in the support set for a given query image. The function to compute this is given in `util/metric.py`:
 ```
@@ -68,6 +71,9 @@ def support_influence(softmaxes, qlabels, sweights, slabels):
     batch_influences.append(influences[None])
   return torch.cat(batch_influences, dim=0)
 ```
+
+This figure shows results of ranking support images using support influence by most helpful and most harmful: 
+![Influences](figs/influence.png)
 
 ## Training
 Command for training NW head with paper's hyperparameters:
