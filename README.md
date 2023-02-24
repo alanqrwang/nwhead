@@ -131,7 +131,7 @@ This code was run and tested on an Nvidia A6000 GPU with the following dependenc
 + numpy 1.21.5
 
 ## Citation
-If you use HyperRecon or some part of the code, please cite:
+If you use NW head or some part of the code, please cite:
 ```
 @article{
 wang2022nwhead,
