@@ -1,7 +1,7 @@
 # Code for "A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification" (TMLR 2023)
 Repository containing training and evaluation code for the NW head -- an interpretable/explainable, nonparametric classification head which can be used with any neural network.
 ![Architecture](figs/arch.png)
-[link to paper]([https://arxiv.org/abs/2212.03411](https://openreview.net/forum?id=iEq6lhG4O3&referrer=%5BTMLR%5D(%2Fgroup%3Fid%3DTMLR)))
+[link to paper](https://openreview.net/forum?id=iEq6lhG4O3&referrer=%5BTMLR%5D(%2Fgroup%3Fid%3DTMLR)
 
 ## NW Head
 The NW head code can be found in `model/classifier.py`:
