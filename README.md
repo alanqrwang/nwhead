@@ -134,13 +134,12 @@ This code was run and tested on an Nvidia A6000 GPU with the following dependenc
 If you use NW head or some part of the code, please cite:
 ```
 @article{
-  wang2022nwhead,
-  title={A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification},
-  author={Alan Q. Wang and Mert R. Sabuncu},
-  journal={Transactions on Machine Learning Research},
-  issn={2835-8856},
-  year={2022},
-  url={https://openreview.net/forum?id=iEq6lhG4O3},
-  note={}
+    wang2022nwhead,
+    title={A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification},
+    author={Alan Q. Wang and Mert R. Sabuncu},
+    journal={Transactions on Machine Learning Research},
+    issn={2835-8856},
+    year={2022},
+    url={https://openreview.net/forum?id=iEq6lhG4O3},
 }
 ```
