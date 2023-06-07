@@ -36,7 +36,7 @@ class NWHead(nn.Module):
 
 An example of usage in a CNN can be found in `model/net.py`.
 
-In particular, the ranking support images by the `scores` variable enables sorting the support images by similarity, as in this figure:
+In particular, ranking support images by the `scores` variable enables sorting the support images by similarity, as in this figure:
 ![Similarities](figs/weights.png)
 
 ## Support influence
