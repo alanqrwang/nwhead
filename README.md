@@ -1,7 +1,7 @@
 # Code for "A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification" (TMLR 2023)
-Repository containing training and evaluation code for the NW head -- an interpretable, nonparametric classification head which can be used with any neural network.
+Repository containing training and evaluation code for the NW head -- an interpretable/explainable, nonparametric classification head which can be used with any neural network.
 ![Architecture](figs/arch.png)
-[link to paper](https://arxiv.org/abs/2212.03411)
+[link to paper](https://openreview.net/forum?id=iEq6lhG4O3)
 
 ## NW Head
 The NW head code can be found in `model/classifier.py`:
@@ -18,7 +18,7 @@ class NWHead(nn.Module):
               scores_only=False):
     """
     Computes Nadaraya-Watson prediction.
-    Returns predicted probabilities, weights, and scores.
+    Returns (softmaxed) predicted probabilities.
     Args:
       query_feats: (b, embed_dim)
       support_feats: (b, num_support, embed_dim)
@@ -108,7 +108,7 @@ python train.py \
 ```
 
 ## Evaluation
-Evaluation pre-computes all embeddings in the dataset and saves them to the disk (in folder defined by `--models_dir`) before running forward passes. This is done for computational efficiency but can be changed depending on your needs. The script is set up to run all test modes reported in the paper (see the `args.list_of_test_modes` variable in `eval.py`).
+Evaluation pre-computes all embeddings in the dataset and saves them to the disk (in folder defined by `--models_dir`) before running forward passes. This is done for computational efficiency (but feel free to change it depending on your needs). The script is set up to run all test modes reported in the paper (see the `args.list_of_test_modes` variable in `eval.py`).
 
 Command for evaluating NW head with paper's hyperparameters:
 ```
@@ -131,6 +131,15 @@ This code was run and tested on an Nvidia A6000 GPU with the following dependenc
 + numpy 1.21.5
 
 ## Citation
-If you use HyperRecon or some part of the code, please cite:
+If you use NW head or some part of the code, please cite:
 ```
+@article{
+    wang2022nwhead,
+    title={A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification},
+    author={Alan Q. Wang and Mert R. Sabuncu},
+    journal={Transactions on Machine Learning Research},
+    issn={2835-8856},
+    year={2022},
+    url={https://openreview.net/forum?id=iEq6lhG4O3},
+}
 ```
