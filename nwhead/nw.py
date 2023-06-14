@@ -23,7 +23,6 @@ class NWNet(nn.Module):
                  embed_dim=0, 
                  finetune_softfeatmask=False,
                  finetune_proj=False,
-                 use_nis=False,
                  debug_mode=False,
                  device='cuda:0', 
                  use_nll_loss=False
@@ -40,20 +39,13 @@ class NWNet(nn.Module):
         self.train_type = train_type
         self.device = device
         self.debug_mode = debug_mode
-        self.use_nis = use_nis
         self.use_nll_loss = use_nll_loss
-        if use_nis:
-            raise NotImplementedError('need to figure out how to not backprop on nis score in NWHead')
+        self.num_classes = num_classes
         assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
         # Kernel
         kernel = get_kernel(kernel_type)
 
-        if use_nis:
-            self.num_classes = num_classes + 1 # NIS class
-            self.nis_y = self.num_classes # NIS class
-        else:
-            self.num_classes = num_classes
 
         if finetune_softfeatmask:
             assert embed_dim == 0
@@ -71,8 +63,7 @@ class NWNet(nn.Module):
         self.nwhead = NWHead(kernel=kernel,
                              feat_dim=feat_dim,
                              embed_dim=embed_dim,
-                             apply_softfeatmask=finetune_softfeatmask,
-                             use_nis=use_nis)
+                             apply_softfeatmask=finetune_softfeatmask)
 
         # Support dataset
         self.sset = SupportSet(support_dataset,
@@ -81,8 +72,7 @@ class NWNet(nn.Module):
                                total_per_class,
                                self.num_classes,
                                subsample_classes=subsample_classes,
-                               env_array=env_array,
-                               include_nis=use_nis)
+                               env_array=env_array)
 
     def precompute(self):
         '''Precomputes all support features, cluster centroids, and 
@@ -100,9 +90,6 @@ class NWNet(nn.Module):
             for env_feat, env_y in zip(sfeat, sy):
                 env_feat, env_y = env_feat.to(
                     x.device), env_y.to(x.device)
-                if self.use_nis:
-                    nis_y = torch.tensor(self.nis_y).to(x.device).view(1)
-                    env_y = torch.cat([env_y, nis_y])
                 output = self._forward(qfeat, env_feat, env_y)
                 if self.use_nll_loss:
                     outputs += output.exp()
@@ -128,10 +115,6 @@ class NWNet(nn.Module):
         qfeat, sfeat = feats[:batch_size], feats[batch_size:]
         
         isin = torch.isin(y, sy)
-        if self.use_nis:
-            # If query has no matching class in support, set it as NIS class
-            y[~isin] = self.nis_y
-
         if self.debug_mode:
             qgrid = torchvision.utils.make_grid(linear_normalization(x), nrow=8)
             sgrid = torchvision.utils.make_grid(linear_normalization(sx), nrow=8)
@@ -213,7 +196,6 @@ class NWHead(nn.Module):
                  feat_dim,
                  embed_dim=0, 
                  apply_softfeatmask=False,
-                 use_nis=False, 
                  device='cuda:0', 
                  dtype=torch.float32):
         super(NWHead, self).__init__()
@@ -232,10 +214,6 @@ class NWHead(nn.Module):
             else:
                 self.softfeatmask = nn.Parameter(torch.ones((1, 1, feat_dim), **factory_kwargs))
             self.softfeatmask.requires_grad = True
-        
-        self.use_nis = use_nis
-        if self.use_nis:
-            self.nis_token = torch.ones((1, 1, 1), requires_grad=False, **factory_kwargs)
         
     def embed(self, x):
         bs = len(x)
@@ -265,11 +243,6 @@ class NWHead(nn.Module):
             support_x = squash_mask * support_x
 
         scores = self.kernel(x, support_x)
-
-        if self.use_nis:
-            # Add constant NIS score
-            nis_score = self.nis_token.repeat(len(x), scores.shape[1], 1)
-            scores = torch.cat((scores, nis_score), dim=-1)
 
         probs = F.softmax(scores, dim=-1)
         # (B, num_queries, num_keys) x (B, num_keys=num_vals, num_classes) -> (B, num_queries, num_classes)

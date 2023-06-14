@@ -18,12 +18,10 @@ class SupportSet:
                  total_per_class, 
                  num_classes,
                  subsample_classes=None,
-                 env_array=None, 
-                 include_nis=False):
+                 env_array=None):
         self.train_type = train_type
         self.num_per_class = num_per_class
         self.y_array = np.array(support_set.targets)
-        self.include_nis = include_nis
         self.num_classes = num_classes
         self.subsample_classes = subsample_classes
 
@@ -90,9 +88,6 @@ class SupportSet:
         if random.random() < 0.01 and self.train_type != 'unbalanced':
             self._verify_sy(sy)
 
-        if self.include_nis:
-            nis_y = torch.tensor(self.nis_y).to(sy.device).view(1)
-            sy = torch.cat([sy, nis_y])
         return sx, sy, sm
 
     def get_infer_support(self, mode):
@@ -108,9 +103,6 @@ class SupportSet:
         else:
             raise NotImplementedError
 
-        if self.include_nis:
-            nis_y = torch.tensor(self.nis_y).to(sy.device).view(1)
-            sy = torch.cat([sy, nis_y])
         return sfeat, sy
 
     def _combine_env_datasets(self, env_datasets):
