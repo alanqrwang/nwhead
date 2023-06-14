@@ -5,10 +5,11 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 def check_type(x):
   return x.cpu().detach().numpy() if isinstance(x, torch.Tensor) else x
 
-def acc(scores, targets):
-  '''Returns accuracy given batch of probabilities and one-hot targets.'''
-  return accuracy_score(torch.argmax(targets, dim=-1).cpu().detach().numpy(),
-                        torch.argmax(scores, dim=-1).cpu().detach().numpy())
+def acc(pred, targets):
+  '''Returns accuracy given batch of categorical predictions and targets.'''
+  pred = check_type(pred)
+  targets = check_type(targets)
+  return accuracy_score(targets, pred)
 
 def roc(pr, gt):
   """pr  : prediction, B 
@@ -55,7 +56,7 @@ class Metric:
     if isinstance(val, torch.Tensor):
       val = val.cpu().detach().item()
     if isinstance(val, np.ndarray):
-      val = np.asscalar(val)
+      val = val.item()
     self.num_samples += samples
     self.tot_val += (val * samples)
   

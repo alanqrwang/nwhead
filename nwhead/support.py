@@ -17,6 +17,7 @@ class SupportSet:
                  num_per_class, 
                  total_per_class, 
                  num_classes,
+                 subsample_classes=None,
                  env_array=None, 
                  include_nis=False):
         self.train_type = train_type
@@ -24,17 +25,11 @@ class SupportSet:
         self.y_array = np.array(support_set.targets)
         self.include_nis = include_nis
         self.num_classes = num_classes
+        self.subsample_classes = subsample_classes
 
-        # Simplest case, no environment info and single support dataset
-        if env_array is None and isinstance(support_set, Dataset):
-            assert train_type in ['random', 'unbalanced']
-            self.env_array = np.zeros(len(support_set))
-            support_set = DatasetMetadata(support_set, self.env_array)
-            self.combined_dataset = support_set
-            self.env_datasets = self._separate_env_datasets(support_set)
         # If env_array is provided, then support dataset should be a single
         # Pytorch Dataset. 
-        elif env_array is not None:
+        if env_array is not None:
             assert train_type in ['match', 'mixmatch']
             self.env_array = env_array
             support_set = DatasetMetadata(support_set, self.env_array)
@@ -50,10 +45,15 @@ class SupportSet:
             support_set = DatasetMetadata(support_set, self.env_array)
             self.env_datasets = support_set
             self.combined_dataset = self._combine_env_datasets(support_set)
+        # Simplest case, no environment info and single support dataset
         else:
-            raise NotImplementedError
+            assert train_type in ['random', 'unbalanced']
+            self.env_array = np.zeros(len(support_set))
+            support_set = DatasetMetadata(support_set, self.env_array)
+            self.combined_dataset = support_set
+            self.env_datasets = self._separate_env_datasets(support_set)
 
-        self.support_loaders = self._build_support_loaders(total_per_class)
+        self.support_loaders = self._build_full_loader(total_per_class)
 
         self.train_iter, self.eval_iter = self._build_train_support_iter()
 
@@ -68,7 +68,7 @@ class SupportSet:
         self.cluster_feat, self.cluster_y = self._compute_clusters()
         self.random_iter = self._build_random_support_iter()
 
-    def get_train_support(self, env_index):
+    def get_train_support(self, y, env_index):
         '''Samples a support for training.'''
         if self.train_type == 'mixmatch':
             train_iter = np.random.choice(self.train_iter)
@@ -84,7 +84,7 @@ class SupportSet:
             sx = torch.cat([sx, sx1], dim=0)
             sy = torch.cat([sy, sy1], dim=0)
         else:
-            sx, sy, sm = self.train_iter.next()
+            sx, sy, sm = self.train_iter.next(y)
 
         # Occasionally verify sampled classes
         if random.random() < 0.01 and self.train_type != 'unbalanced':
@@ -98,7 +98,7 @@ class SupportSet:
     def get_infer_support(self, mode):
         '''Samples a support for inference depending on mode.'''
         if mode == 'random':
-            sfeat, sy, _ = next(self.random_iter)
+            sfeat, sy, _ = self.random_iter.next()
         elif mode == 'full':
             sfeat, sy = self.full_feat, self.full_y
         elif mode == 'cluster':
@@ -136,7 +136,7 @@ class SupportSet:
         Samples images from dataset.'''
         if self.train_type == 'random':
             train_iter = InfiniteUniformClassLoader(
-                self.combined_dataset, self.num_per_class)
+                self.combined_dataset, self.num_per_class, self.subsample_classes)
         elif self.train_type == 'unbalanced':
             # Compute remaining images so that it matches uniform class loading
             remaining = (self.num_per_class-1)*self.num_classes
@@ -145,11 +145,11 @@ class SupportSet:
         else:
             train_iter = [iter(InfiniteUniformClassLoader(env, self.num_per_class)) for env in self.env_datasets]
         eval_iter = InfiniteUniformClassLoader(
-            self.combined_dataset, self.num_per_class)
+            self.combined_dataset, self.num_per_class, self.subsample_classes)
         return train_iter, eval_iter
 
-    def _build_support_loaders(self, total_per_class=100):
-        '''Support loader for precomputing features during evaluation.
+    def _build_full_loader(self, total_per_class=100):
+        '''Full loader for precomputing features during evaluation.
         Because the model assumes balanced classes during training and
         test, the support loader samples evenly across classes.
         '''
@@ -178,7 +178,7 @@ class SupportSet:
         for c in np.unique(labels):
             embeddings_class = embeddings[labels==c]
             img_ids_class = img_ids[labels==c]
-            kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(embeddings_class)
+            kmeans = KMeans(n_clusters=num_clusters, random_state=0, n_init='auto').fit(embeddings_class)
             centroids = torch.tensor(kmeans.cluster_centers_).float()
             slabel += [c] * num_clusters 
             if closest:
@@ -216,6 +216,7 @@ class SupportSet:
         return sfeat, slabel
 
     def _verify_sy(self, sy):
-        unique_labels, counts = torch.unique(sy, return_counts=True)
-        assert torch.equal(unique_labels, torch.arange(self.num_classes))
-        assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
+        # unique_labels, counts = torch.unique(sy, return_counts=True)
+        # assert torch.equal(unique_labels, torch.arange(self.num_classes))
+        # assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
+        pass

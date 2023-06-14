@@ -3,6 +3,12 @@ import torch.nn.functional as F
 import numpy as np
 import os
 import shutil
+import argparse
+
+try:
+    import wandb
+except ImportError as e:
+    pass
 
 def summary(network):
   """Print model summary."""
@@ -74,3 +80,37 @@ def save_metrics(save_dir, logger, *metrics):
   for metric in metrics:
     metric_arr = logger[metric]
     np.savetxt(save_dir + '/{}.txt'.format(metric), metric_arr)
+
+def initialize_wandb(config):
+    if config.wandb_api_key_path is not None:
+        with open(config.wandb_api_key_path, "r") as f:
+            os.environ["WANDB_API_KEY"] = f.read().strip()
+
+    wandb.init(**config.wandb_kwargs)
+    wandb.config.update(config)
+
+def parse_bool(v):
+    if v.lower()=='true':
+        return True
+    elif v.lower()=='false':
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+# Taken from https://sumit-ghosh.com/articles/parsing-dictionary-key-value-pairs-kwargs-argparse-python/
+class ParseKwargs(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, dict())
+        for value in values:
+            key, value_str = value.split('=')
+            if value_str.replace('-','').isnumeric():
+                processed_val = int(value_str)
+            elif value_str.replace('-','').replace('.','').isnumeric():
+                processed_val = float(value_str)
+            elif value_str in ['True', 'true']:
+                processed_val = True
+            elif value_str in ['False', 'false']:
+                processed_val = False
+            else:
+                processed_val = value_str
+            getattr(namespace, self.dest)[key] = processed_val

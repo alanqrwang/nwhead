@@ -5,18 +5,24 @@ import torchvision
 import matplotlib.pyplot as plt
 from .support import SupportSet
 from .kernel import get_kernel
+from .utils import linear_normalization
+from torch.nn.init import xavier_uniform_
 
 class NWNet(nn.Module):
     def __init__(self, 
                  featurizer, 
                  support_dataset, 
                  num_classes,
+                 feat_dim,
                  kernel_type='euclidean', 
                  train_type='random', 
-                 metadata_array=None, 
+                 env_array=None, 
                  num_per_class=1, 
                  total_per_class=100,
+                 subsample_classes=None,
                  embed_dim=0, 
+                 finetune_softfeatmask=False,
+                 finetune_proj=False,
                  use_nis=False,
                  debug_mode=False,
                  device='cuda:0', 
@@ -49,9 +55,23 @@ class NWNet(nn.Module):
         else:
             self.num_classes = num_classes
 
+        if finetune_softfeatmask:
+            assert embed_dim == 0
+            # Freeze the weights of featurizer
+            for param in self.featurizer.parameters():
+                param.requires_grad = False
+
+        if finetune_proj:
+            assert embed_dim > 0
+            # Freeze the weights of featurizer
+            for param in self.featurizer.parameters():
+                param.requires_grad = False
+
         # NW Head
         self.nwhead = NWHead(kernel=kernel,
+                             feat_dim=feat_dim,
                              embed_dim=embed_dim,
+                             apply_softfeatmask=finetune_softfeatmask,
                              use_nis=use_nis)
 
         # Support dataset
@@ -60,7 +80,9 @@ class NWNet(nn.Module):
                                num_per_class,
                                total_per_class,
                                self.num_classes,
-                               metadata_array=metadata_array)
+                               subsample_classes=subsample_classes,
+                               env_array=env_array,
+                               include_nis=use_nis)
 
     def precompute(self):
         '''Precomputes all support features, cluster centroids, and 
@@ -97,7 +119,7 @@ class NWNet(nn.Module):
     def forward(self, x, y, metadata=None):
         '''Forward pass using images for query and support.
         Support set is some random subset of support dataset.'''
-        sx, sy, sm = self.sset.get_train_support(metadata)
+        sx, sy, sm = self.sset.get_train_support(y, metadata)
         sx, sy = sx.to(x.device), sy.to(x.device)
 
         batch_size = len(x)
@@ -111,22 +133,19 @@ class NWNet(nn.Module):
             y[~isin] = self.nis_y
 
         if self.debug_mode:
-            qgrid = torchvision.utils.make_grid(self.linear_normalization(x), nrow=8)
-            sgrid = torchvision.utils.make_grid(self.linear_normalization(sx), nrow=8)
+            qgrid = torchvision.utils.make_grid(linear_normalization(x), nrow=8)
+            sgrid = torchvision.utils.make_grid(linear_normalization(sx), nrow=8)
             print('qbatch shape:', x.shape)
             print('sbatch shape:', sx.shape)
-            # qgrid = torchvision.utils.make_grid(x, nrow=8)
-            # sgrid = torchvision.utils.make_grid(sx, nrow=8)
-            # qgrid = torch.cat([qgrid.cpu(), torch.zeros(1, *qgrid.shape[1:])], dim=0)
-            # sgrid = torch.cat([sgrid.cpu(), torch.zeros(1, *sgrid.shape[1:])], dim=0)
             plt.imshow(qgrid.permute(1, 2, 0).cpu().detach().numpy())
             plt.show()
             plt.imshow(sgrid.permute(1, 2, 0).cpu().detach().numpy())
             plt.show()
             print('qy:', y)
             print('sy:', sy)
-            print('qmeta:', metadata[:, self.metadata_idx])
-            print('smeta:', sm[:, self.metadata_idx])
+            if metadata is not None:
+                print('qmeta:', metadata)
+                print('smeta:', sm)
             print('qy in sy:', isin)
 
         return self._forward(qfeat, sfeat, sy), isin
@@ -191,7 +210,9 @@ class NWNet(nn.Module):
 class NWHead(nn.Module):
     def __init__(self, 
                  kernel, 
+                 feat_dim,
                  embed_dim=0, 
+                 apply_softfeatmask=False,
                  use_nis=False, 
                  device='cuda:0', 
                  dtype=torch.float32):
@@ -199,13 +220,27 @@ class NWHead(nn.Module):
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
         self.embed_dim = embed_dim
+        self.apply_softfeatmask = apply_softfeatmask
+
         if self.embed_dim > 0:
-            self.projection = nn.LazyLinear(embed_dim)
+            self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, embed_dim), **factory_kwargs))
+            xavier_uniform_(self.proj_weight)
+        
+        if self.apply_softfeatmask:
+            if self.embed_dim > 0:
+                self.softfeatmask = nn.Parameter(torch.ones((1, 1, embed_dim), **factory_kwargs))
+            else:
+                self.softfeatmask = nn.Parameter(torch.ones((1, 1, feat_dim), **factory_kwargs))
+            self.softfeatmask.requires_grad = True
         
         self.use_nis = use_nis
         if self.use_nis:
             self.nis_token = torch.ones((1, 1, 1), requires_grad=False, **factory_kwargs)
         
+    def embed(self, x):
+        bs = len(x)
+        return torch.bmm(x, self.proj_weight.repeat(bs, 1, 1)) 
+
     def forward(self, x, support_x, support_y):
         """
         Computes Nadaraya-Watson head on query, key and value tensors.
@@ -221,8 +256,13 @@ class NWHead(nn.Module):
         """
         x = x.unsqueeze(1)
         if self.embed_dim > 0:
-            x = self.projection(x)
-            support_x = self.projection(support_x)
+            x = self.embed(x)
+            support_x = self.embed(support_x)
+        
+        if self.apply_softfeatmask:
+            squash_mask = torch.sigmoid(self.softfeatmask)
+            x = squash_mask * x
+            support_x = squash_mask * support_x
 
         scores = self.kernel(x, support_x)
 

@@ -155,7 +155,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, norm_layer=norm_layer)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2, norm_layer=norm_layer)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        # self.fc = nn.Linear(512 * block.expansion, num_classes)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -172,13 +172,6 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
-
-        # Projection
-        self.embed_dim = embed_dim
-        if embed_dim > 0:
-            factory_kwargs = {'device': device, 'dtype': dtype}
-            self.proj_weight = nn.Parameter(torch.empty((1, 512*block.expansion, embed_dim), **factory_kwargs))
-            xavier_uniform_(self.proj_weight)
 
         self.include_classifier = include_classifier
 
@@ -202,11 +195,6 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def embed(self, input):
-        bs = len(input)
-        # (B, num_queries, in_dim) x (B, in_dim, embed_dim) -> (B, num_queries, embed_dim)
-        return torch.bmm(input.unsqueeze(1), self.proj_weight.repeat(bs, 1, 1)).squeeze(1)
-
     def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
@@ -220,9 +208,6 @@ class ResNet(nn.Module):
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-
-        if self.embed_dim > 0:
-            x = self.embed(x)
 
         if self.include_classifier:
             x = self.fc(x)

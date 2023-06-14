@@ -105,11 +105,16 @@ class InfiniteUniformClassLoader(DataLoader):
     def __init__(self,
                  dataset,
                  num_per_class,
+                 subsample_classes=None
                  ):
         self.dataset = dataset
         y_array = dataset.targets
-
         self.indices = get_separated_indices(y_array)
+        self.num_classes = len(self.indices)
+        self.subsample_classes = subsample_classes
+        if subsample_classes:
+            assert subsample_classes < len(self.indices)
+
         self.num_per_class = num_per_class
         super(InfiniteUniformClassLoader, self).__init__(dataset)
 
@@ -117,14 +122,26 @@ class InfiniteUniformClassLoader(DataLoader):
         return self
 
     def __next__(self):
+        raise NotImplementedError
+
+    def next(self, qy=None):
+        if self.subsample_classes:
+            qy = qy.cpu().detach().numpy()
+            probs = np.ones(len(self.indices))
+            probs[qy] = 0
+            probs /= probs.sum()
+            subclasses = np.random.choice(self.num_classes, size=self.subsample_classes, replace=False, p=probs)
+
+            subclasses = np.concatenate([subclasses, qy])
+            indices = [self.indices[i] for i in subclasses] 
+        else:
+            indices = self.indices
+
         support_idxs = np.array([np.random.choice(
-            row, size=self.num_per_class, replace=False) for row in self.indices]).flatten()
+            row, size=self.num_per_class, replace=False) for row in indices]).flatten()
 
         # Get support data from dataset and collate into mini-batch
         return self.collate_fn([self.dataset[i] for i in support_idxs])
-
-    def next(self):
-        return self.__next__()
 
 def get_separated_indices(vals):
     '''
