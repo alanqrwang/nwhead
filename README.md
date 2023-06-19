@@ -102,7 +102,7 @@ Ranking support images by the `scores` variable enables sorting the support imag
 ![Similarities](figs/weights.png)
 
 ### Explainability via support influence
-The NW head naturally lends itself to a notion of “support influence" (Section 3.4 in the paper) which finds the most helpful and most harmful examples in the support set for a given query image. The function to compute this is given in `util/metric.py`:
+The NW head naturally lends itself to a notion of “support influence" (Section 3.4 in the [paper](https://arxiv.org/pdf/2212.03411.pdf)) which finds the most helpful and most harmful examples in the support set for a given query image. The function to compute this is given in `util/metric.py`:
 ```
 def support_influence(softmaxes, qlabels, sweights, slabels):
   '''
