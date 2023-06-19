@@ -105,33 +105,33 @@ Ranking support images by the `scores` variable enables sorting the support imag
 The NW head naturally lends itself to a notion of “support influence" (Section 3.4 in the [paper](https://arxiv.org/pdf/2212.03411.pdf)) which finds the most helpful and most harmful examples in the support set for a given query image. The function to compute this is given in `util/metric.py`:
 ```
 def support_influence(softmaxes, qlabels, sweights, slabels):
-  '''
-  Influence is defined as L(rescaled_softmax, qlabel) - L(softmax, qlabel).
-  Positive influence => removing support image increases loss => support image was helpful
-  Negative influence => removing support image decreases loss => support image was harmful
-  bs should be 1.
-  
-  softmaxes: (bs, num_classes)
-  qlabel: One-hot encoded query label (bs, num_classes)
-  sweights: Weights between query and each support (bs, num_support)
-  slabels: One-hot encoded support label (bs, num_support, num_classes)
-  '''
-  batch_influences = []
-  bs = len(softmaxes)
-  for bid in range(bs):
-    softmax = softmaxes[bid]
-    qlabel = qlabels[bid]
-    sweight = sweights[bid]
-
-    qlabel_cat = qlabel.argmax(-1).item()
-    slabels_cat = slabels.argmax(-1)
+    '''
+    Influence is defined as L(rescaled_softmax, qlabel) - L(softmax, qlabel).
+    Positive influence => removing support image increases loss => support image was helpful
+    Negative influence => removing support image decreases loss => support image was harmful
+    bs should be 1.
     
-    p = softmax[qlabel_cat]
-    indicator = (slabels_cat==qlabel_cat).long()
-    influences = torch.log((p - p*sweight)/(p - sweight*indicator))
-
-    batch_influences.append(influences[None])
-  return torch.cat(batch_influences, dim=0)
+    softmaxes: (bs, num_classes)
+    qlabel: One-hot encoded query label (bs, num_classes)
+    sweights: Weights between query and each support (bs, num_support)
+    slabels: One-hot encoded support label (bs, num_support, num_classes)
+    '''
+    batch_influences = []
+    bs = len(softmaxes)
+    for bid in range(bs):
+        softmax = softmaxes[bid]
+        qlabel = qlabels[bid]
+        sweight = sweights[bid]
+        
+        qlabel_cat = qlabel.argmax(-1).item()
+        slabels_cat = slabels.argmax(-1)
+        
+        p = softmax[qlabel_cat]
+        indicator = (slabels_cat==qlabel_cat).long()
+        influences = torch.log((p - p*sweight)/(p - sweight*indicator))
+    
+        batch_influences.append(influences[None])
+    return torch.cat(batch_influences, dim=0)
 ```
 
 This figure shows results of ranking support images using support influence by most helpful and most harmful: 
