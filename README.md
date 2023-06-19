@@ -138,52 +138,18 @@ This figure shows results of ranking support images using support influence by m
 ![Influences](figs/influence.png)
 
 ## Training
-Command for training NW head with paper's hyperparameters:
+Example command for training NW head:
 ```
 python train.py \
   --models_dir out/ \ # Directory to save model outputs
   --dataset bird  \ # Dataset to use
   --arch resnet18 \ # Feature extractor, $g_\theta$ in paper
   --train_method nwhead \ # Model to train, choose from [fchead, nwhead]
-  --batch_size 4 \
-  --lr 1e-3 \
-  --num_epochs 40000 \
-  --scheduler_milestones 20000 30000 \ # Epoch milestones to decrease lr via scheduler
-  --embed_dim 128 \ # Embedding dimension, $d$ in paper
-  --num_steps_per_epoch 32 \ # Number of gradient steps per training epoch
-  --num_val_steps_per_epoch 32  # Number of gradient steps per validation epoch
-```
-These hyperparameters are probably not optimal. Notably, `num_epochs` could probably be reduced with appropriate adjustments to the learning rate scheduler. Your mileage may vary on different datasets.
-
-Command for training (baseline) FC head with paper's hyperparameters:
-```
-python train.py \
-  --models_dir out/ \ # Directory to save model outputs
-  --dataset bird \ # Dataset to use
-  --arch resnet18 \ # Feature extractor, $g_\theta$ in paper
-  --train_method fchead \ # Model to train, choose from [fchead, nwhead]
   --batch_size 32 \
-  --lr 1e-1 \
-  --num_epochs 200 \
-  --scheduler_milestones 100 150 \ # Epoch milestones to decrease lr via scheduler
-  --embed_dim 0  # Embedding dimension, $d$ in paper. 0 indicates no projection.
+  --lr 1e-3 \
+  --num_epochs 1000 \
+  --scheduler_milestones 500 750 \ # Epoch milestones to decrease lr via scheduler
 ```
-
-## Evaluation
-Evaluation pre-computes all embeddings in the dataset and saves them to the disk (in folder defined by `--models_dir`) before running forward passes. This is done for computational efficiency (but feel free to change it depending on your needs). The script is set up to run all test modes reported in the paper (see the `args.list_of_test_modes` variable in `eval.py`).
-
-Command for evaluating NW head with paper's hyperparameters:
-```
-python eval.py \
-  --models_dir out/ \ # Directory to save model outputs
-  --load_path weights.h5 \ # Model checkpoint to load weights from
-  --dataset bird \
-  --arch resnet18 \
-  --test_batch_size 4 \
-  --seed 1 \
-  --embed_dim 128 \
-```
-Toggle the command `--recompute_embeddings` or `--no_recompute_embeddings` to skip recomputing embeddings each time.
 
 ## Requirements
 This code was run and tested on an Nvidia A6000 GPU with the following dependencies:

@@ -27,19 +27,11 @@ class Parser(argparse.ArgumentParser):
               type=str, help='directory to save models')
     self.add_argument('--log_interval', type=int,
               default=25, help='Frequency of logs')
-    self.add_argument('--viz_interval', type=int,
-              default=25, help='Frequency of logs')
-    self.add_argument('--load', type=str, default=None,
-              help='Load checkpoint at .h5 path')
-    self.add_argument('--cont', type=int, default=0,
-              help='Load checkpoint at .h5 path')
     self.add_argument('--workers', type=int, default=0,
               help='Num workers')
     self.add_argument('--gpu_id', type=int, default=0,
               help='gpu id to train on')
-    self.add_bool_arg('save_preds', False)
     self.add_bool_arg('debug_mode', False)
-    self.add_bool_arg('recompute_embeddings', False)
 
     # Machine learning parameters
     self.add_argument('--dataset', type=str, default='cifar10')
@@ -64,23 +56,17 @@ class Parser(argparse.ArgumentParser):
     self.add_argument('--arch', type=str, default='resnet18')
     self.add_argument(
       '--train_method', default='nwhead')
-    self.add_argument(
-      '--test_batch_size', type=int, default=32)
+    self.add_bool_arg('use_nll_loss', True)
 
     # NW head parameters
     self.add_argument('--kernel_type', type=str, default='euclidean',
               help='Kernel type')
     self.add_argument('--embed_dim', type=int,
               default=0)
-    self.add_bool_arg('add_bias', False)
     self.add_argument('--num_classes_per_batch_support', type=int,
               default=1)
     self.add_argument('--subsample_classes', type=int,
               default=None, help='size of subsample sampler')
-    self.add_bool_arg('apply_softfeatmask', False)
-    self.add_bool_arg('freeze_featurizer', False)
-    self.add_bool_arg('use_nll_loss', False)
-    self.add_bool_arg('length_normalize', False)
 
     # Weights & Biases
     self.add_bool_arg('use_wandb', False)
@@ -147,7 +133,6 @@ def main():
     # Get transforms
     if args.dataset in ['cifar10', 'cifar100']:
         transform_train = transforms.Compose([
-                  # transforms.ToPILImage(),
                   transforms.RandomCrop(32, padding=4),
                   transforms.RandomHorizontalFlip(),
                   transforms.ToTensor(),
@@ -214,38 +199,12 @@ def main():
             feature_extractor = load_model('CIFAR_ResNet18', num_classes, args.embed_dim)
         else:
             feature_extractor = load_model('resnet18', num_classes, args.embed_dim)
-    elif args.arch == 'resnet18pretrained':
-        feat_dim = 512
-        if args.dataset in ['cifar10', 'cifar100']:
-            feature_extractor = load_model('CIFAR_ResNet18', num_classes, args.embed_dim, pretrained=True)
-        else:
-            feature_extractor = load_model('resnet18', num_classes, args.embed_dim, pretrained=True, include_classifier=False)
     elif args.arch == 'densenet121':
         feat_dim = 1024
         if args.dataset in ['cifar10', 'cifar100']:
             feature_extractor = load_model('CIFAR_DenseNet121', num_classes, args.embed_dim)
         else:
             feature_extractor = load_model('densenet121', num_classes, args.embed_dim)
-    elif args.arch == 'densenet121pretrained':
-        feat_dim = 1024
-        if args.dataset in ['cifar10', 'cifar100']:
-            feature_extractor = load_model('CIFAR_DenseNet121', num_classes, args.embed_dim, pretrained=True)
-        else:
-            feature_extractor = load_model('densenet121', num_classes, args.embed_dim, pretrained=True)
-    elif args.arch == 'vit_b_16':
-        feature_extractor = torchvision.models.get_model(args.arch, weights='IMAGENET1K_V1', num_classes=1000)
-        feature_extractor.heads = torch.nn.Identity()
-        feat_dim = 768
-    elif args.arch == 'supcon_resnet50':
-        feat_dim = 2048
-        feature_extractor = load_model('supcon_resnet50', num_classes, pretrained=True)
-    elif args.arch == 'moco_resnet50':
-        feat_dim = 2048
-        feature_extractor = load_model('moco_resnet50', num_classes, pretrained=True)
-        feature_extractor.fc = torch.nn.Identity()
-    elif args.arch == 'dinov2_vits14':
-        feat_dim = 384
-        feature_extractor = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
     else:
         raise NotImplementedError
     print(feature_extractor)
@@ -254,8 +213,7 @@ def main():
         network = FCNet(feature_extractor, 
                         feat_dim, 
                         num_classes,
-                        use_nll_loss=args.use_nll_loss,
-                        freeze_featurizer=args.freeze_featurizer)
+                        use_nll_loss=args.use_nll_loss)
     elif args.train_method == 'nwhead':
         network = NWNet(feature_extractor, 
                         train_dataset,
@@ -264,10 +222,6 @@ def main():
                         kernel_type=args.kernel_type,
                         subsample_classes=args.subsample_classes,
                         embed_dim=args.embed_dim,
-                        add_bias=args.add_bias,
-                        length_normalize=args.length_normalize,
-                        freeze_featurizer=args.freeze_featurizer,
-                        apply_softfeatmask=args.apply_softfeatmask,
                         debug_mode=args.debug_mode,
                         use_nll_loss=args.use_nll_loss)
     else:
