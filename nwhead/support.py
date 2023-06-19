@@ -18,12 +18,14 @@ class SupportSet:
                  total_per_class, 
                  num_classes,
                  subsample_classes=None,
-                 env_array=None):
+                 env_array=None,
+                 num_clusters=3):
         self.train_type = train_type
         self.num_per_class = num_per_class
         self.y_array = np.array(support_set.targets)
         self.num_classes = num_classes
         self.subsample_classes = subsample_classes
+        self.num_clusters = num_clusters
 
         # If env_array is provided, then support dataset should be a single
         # Pytorch Dataset. 
@@ -63,7 +65,7 @@ class SupportSet:
         self.full_y_sep = sy_env
         self.full_meta_sep = smeta_env
 
-        self.cluster_feat, self.cluster_y = self._compute_clusters()
+        self.cluster_feat, self.cluster_y = self._compute_clusters(self.num_clusters)
         self.random_iter = self._build_random_support_iter()
 
     def get_train_support(self, y, env_index):
@@ -155,7 +157,7 @@ class SupportSet:
             feat_dataset, self.num_per_class)
         return iter(eval_loader)
 
-    def _compute_clusters(self, num_clusters=3, closest=False, save_nearest_imgs=False):
+    def _compute_clusters(self, num_clusters=3, closest=False):
         '''Performs k-means clustering to find support set.
         
         Args:
@@ -183,26 +185,6 @@ class SupportSet:
                 sfeat = closest_embedding if sfeat is None else torch.cat((sfeat, closest_embedding), dim=0)
             else:
                 sfeat = centroids if sfeat is None else torch.cat((sfeat, centroids), dim=0)
-
-            # if save_nearest_imgs:
-            #     dist_matrix = torch.cdist(centroids, embeddings_class)
-            #     min_indices = dist_matrix.argmin(dim=-1)
-            #     dataset_indices = img_ids_class[min_indices]
-            #     if num_clusters == 1:
-            #         dataset_indices = [dataset_indices]
-            #     imgs, label, _ = self.support_dataset[dataset_indices]
-            #     assert (label.argmax(-1) == torch.full_like(label.argmax(-1), c)).all(), 'Label extracted from support set doesn\'t match current label'
-            #     imgs = linear_normalization(imgs)
-            #     save_path = os.path.join(self.img_dir, 'nearest_cluster_k={}_label={}'.format(num_clusters, c))
-            #     np.save(save_path, imgs.cpu().detach().numpy())
-            #     if self.debug_mode:
-            #         print('label:', c)
-            #         img_grid = torchvision.utils.make_grid(imgs, nrow=5)
-            #         fig, axes = plt.subplots(1, 1, figsize=(5, 5))
-            #         axes.axis('off')
-            #         axes.imshow(img_grid.permute(1, 2, 0).cpu().detach().numpy())
-            #         fig.show()
-            #         plt.show()
 
         slabel = torch.tensor(slabel)
         return sfeat, slabel

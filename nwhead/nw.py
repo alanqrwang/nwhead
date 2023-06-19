@@ -20,9 +20,12 @@ class NWNet(nn.Module):
                  num_per_class=1, 
                  total_per_class=100,
                  subsample_classes=None,
+                 num_clusters=3,
                  embed_dim=0, 
-                 finetune_softfeatmask=False,
-                 finetune_proj=False,
+                 add_bias=False,
+                 length_normalize=False,
+                 freeze_featurizer=False,
+                 apply_softfeatmask=False,
                  debug_mode=False,
                  device='cuda:0', 
                  use_nll_loss=False
@@ -46,16 +49,7 @@ class NWNet(nn.Module):
         # Kernel
         kernel = get_kernel(kernel_type)
 
-
-        if finetune_softfeatmask:
-            assert embed_dim == 0
-            # Freeze the weights of featurizer
-            for param in self.featurizer.parameters():
-                param.requires_grad = False
-
-        if finetune_proj:
-            assert embed_dim > 0
-            # Freeze the weights of featurizer
+        if freeze_featurizer:
             for param in self.featurizer.parameters():
                 param.requires_grad = False
 
@@ -63,7 +57,9 @@ class NWNet(nn.Module):
         self.nwhead = NWHead(kernel=kernel,
                              feat_dim=feat_dim,
                              embed_dim=embed_dim,
-                             apply_softfeatmask=finetune_softfeatmask)
+                             add_bias=add_bias,
+                             apply_softfeatmask=apply_softfeatmask,
+                             length_normalize=length_normalize)
 
         # Support dataset
         self.sset = SupportSet(support_dataset,
@@ -71,6 +67,7 @@ class NWNet(nn.Module):
                                num_per_class,
                                total_per_class,
                                self.num_classes,
+                               num_clusters=num_clusters,
                                subsample_classes=subsample_classes,
                                env_array=env_array)
 
@@ -159,6 +156,7 @@ class NWNet(nn.Module):
             env_meta = []
             for qimg, qlabel, qmeta in loader:
                 qimg = qimg.to(self.device)
+                print(qimg.shape)
                 feat = self.featurizer(qimg).cpu().detach()
                 feats.append(feat)
                 labels.append(qlabel.cpu().detach())
@@ -195,18 +193,26 @@ class NWHead(nn.Module):
                  kernel, 
                  feat_dim,
                  embed_dim=0, 
+                 add_bias=False,
                  apply_softfeatmask=False,
+                 length_normalize=False,
                  device='cuda:0', 
                  dtype=torch.float32):
         super(NWHead, self).__init__()
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
         self.embed_dim = embed_dim
+        self.add_bias = add_bias
         self.apply_softfeatmask = apply_softfeatmask
+        self.length_normalize = length_normalize
 
         if self.embed_dim > 0:
             self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, embed_dim), **factory_kwargs))
             xavier_uniform_(self.proj_weight)
+            if add_bias:
+                self.proj_bias = nn.Parameter(torch.empty((1, 1, embed_dim), **factory_kwargs))
+                xavier_uniform_(self.proj_bias)
+                self.proj_bias.register_hook(lambda grad: print(grad))
         
         if self.apply_softfeatmask:
             if self.embed_dim > 0:
@@ -214,10 +220,21 @@ class NWHead(nn.Module):
             else:
                 self.softfeatmask = nn.Parameter(torch.ones((1, 1, feat_dim), **factory_kwargs))
             self.softfeatmask.requires_grad = True
+
+            if add_bias:
+                if self.embed_dim > 0:
+                    self.softbias = nn.Parameter(torch.randn((1, 1, embed_dim), **factory_kwargs))
+                else:
+                    self.softbias = nn.Parameter(torch.randn((1, 1, feat_dim), **factory_kwargs))
+                self.softbias.requires_grad = True
         
     def embed(self, x):
         bs = len(x)
-        return torch.bmm(x, self.proj_weight.repeat(bs, 1, 1)) 
+        embed = torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
+        if self.add_bias:
+            embed = embed + self.proj_bias
+            print(embed.shape, self.proj_bias.shape)
+        return embed
 
     def forward(self, x, support_x, support_y):
         """
@@ -236,11 +253,21 @@ class NWHead(nn.Module):
         if self.embed_dim > 0:
             x = self.embed(x)
             support_x = self.embed(support_x)
-        
+
+        if self.length_normalize: 
+            x = x / x.norm(dim=-1, keepdim=True)
+            support_x = support_x / support_x.norm(dim=-1, keepdim=True)
+
         if self.apply_softfeatmask:
-            squash_mask = torch.sigmoid(self.softfeatmask)
+            # squash_mask = torch.sigmoid(self.softfeatmask)
+            squash_mask = self.softfeatmask
+            print(squash_mask)
+            print(squash_mask.mean())
             x = squash_mask * x
             support_x = squash_mask * support_x
+            if self.add_bias:
+                x = x + self.softbias
+                support_x = support_x + self.softbias
 
         scores = self.kernel(x, support_x)
 

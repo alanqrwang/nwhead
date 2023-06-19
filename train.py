@@ -2,27 +2,26 @@ import os
 import random
 import numpy as np
 import torch
-from torchvision import transforms
+from torchvision import transforms, datasets
+import torchvision
 from tqdm import tqdm
 import argparse
 from pprint import pprint
 import json
+import wandb
 
-from data.cifar import CIFAR
-from data.bird import Bird
-from data.dog import Dog
-from data.flower import Flower
-from data.aircraft import Aircraft
+from data.bird import Cub200Dataset
+from data.dog import StanfordDogDataset
 from util.metric import Metric
-from util import utils
+from util.utils import parse_bool, ParseKwargs, summary, save_checkpoint, initialize_wandb
 from util import metric
-from loss import loss_ops
 from model import load_model
-from model.net import FCNet, NWNet
+from nwhead.nw import NWNet
+from fchead.fc import FCNet
 
 class Parser(argparse.ArgumentParser):
   def __init__(self):
-    super(Parser, self).__init__(description='FC and NW Head Training')
+    super(Parser, self).__init__(description='NW Head Training')
     # I/O parameters
     self.add_argument('--models_dir', default='./',
               type=str, help='directory to save models')
@@ -34,6 +33,8 @@ class Parser(argparse.ArgumentParser):
               help='Load checkpoint at .h5 path')
     self.add_argument('--cont', type=int, default=0,
               help='Load checkpoint at .h5 path')
+    self.add_argument('--workers', type=int, default=0,
+              help='Num workers')
     self.add_argument('--gpu_id', type=int, default=0,
               help='gpu id to train on')
     self.add_bool_arg('save_preds', False)
@@ -67,12 +68,26 @@ class Parser(argparse.ArgumentParser):
       '--test_batch_size', type=int, default=32)
 
     # NW head parameters
+    self.add_argument('--kernel_type', type=str, default='euclidean',
+              help='Kernel type')
     self.add_argument('--embed_dim', type=int,
               default=0)
+    self.add_bool_arg('add_bias', False)
     self.add_argument('--num_classes_per_batch_support', type=int,
               default=1)
-    self.add_argument('--subsample_size', type=int,
-              default=10, help='size of subsample sampler')
+    self.add_argument('--subsample_classes', type=int,
+              default=None, help='size of subsample sampler')
+    self.add_bool_arg('apply_softfeatmask', False)
+    self.add_bool_arg('freeze_featurizer', False)
+    self.add_bool_arg('use_nll_loss', False)
+    self.add_bool_arg('length_normalize', False)
+
+    # Weights & Biases
+    self.add_bool_arg('use_wandb', False)
+    self.add_argument('--wandb_api_key_path', type=str,
+                        help="Path to Weights & Biases API Key. If use_wandb is set to True and this argument is not specified, user will be prompted to authenticate.")
+    self.add_argument('--wandb_kwargs', nargs='*', action=ParseKwargs, default={},
+                        help='keyword arguments for wandb.init() passed as key1=value1 key2=value2')
 
   def add_bool_arg(self, name, default=True):
     """Add boolean argument to argparse parser"""
@@ -92,7 +107,7 @@ class Parser(argparse.ArgumentParser):
                     batch_size=args.batch_size,
                     embed_dim=args.embed_dim,
                     numsupp=args.num_classes_per_batch_support,
-                    subsample=args.subsample_size,
+                    subsample=args.subsample_classes,
                     wd=args.weight_decay,
                     seed=args.seed
                   ))
@@ -111,251 +126,325 @@ class Parser(argparse.ArgumentParser):
 
 
 def main():
-  # Parse arguments
-  args = Parser().parse()
+    # Parse arguments
+    args = Parser().parse()
 
-  # Set random seed
-  seed = args.seed
-  if seed > 0:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-  
-  # Set device
-  if torch.cuda.is_available():
-    args.device = torch.device('cuda:'+str(args.gpu_id))
-  else:
-    args.device = torch.device('cpu')
-    print('No GPU detected... Training will be slow!')
-  os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
-
-  # Get transforms
-  if args.dataset in ['cifar10', 'cifar100']:
-    transform_train = transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.RandomCrop(32, padding=4),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-              ])
-    transform_test = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-              ])
-  else:
-    transform_train = transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(), 
-                transforms.ToTensor(),
-                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-            ])
-    transform_test = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
-            ])
-  print('Transforms:\n', transform_train, transform_test)
-
-  # Get dataloaders
-  include_support = True if args.train_method == 'nwhead' else False
-  if args.dataset in ['cifar10', 'cifar100']:
-    ds = CIFAR(args.dataset,
-                    args.batch_size, 
-                    args.test_batch_size,
-                    transform_train=transform_train,
-                    transform_test=transform_test,
-                    num_supp_per_batch=args.num_classes_per_batch_support, 
-                    include_support=include_support,
-                    subsample_size=args.subsample_size)
-  elif args.dataset == 'bird':
-    ds = Bird(args.batch_size, 
-                        args.test_batch_size,
-                        transform_train=transform_train,
-                        transform_test=transform_test,
-                        num_supp_per_batch=args.num_classes_per_batch_support, 
-                        include_support=include_support,
-                        subsample_size=args.subsample_size)
-  elif args.dataset == 'dog':
-    ds = Dog(args.batch_size, 
-                        args.test_batch_size,
-                        transform_train=transform_train,
-                        transform_test=transform_test,
-                        num_supp_per_batch=args.num_classes_per_batch_support, 
-                        include_support=include_support,
-                        subsample_size=args.subsample_size)
-  elif args.dataset == 'flower':
-    ds = Flower(args.batch_size, 
-                        args.test_batch_size,
-                        transform_train=transform_train,
-                        transform_test=transform_test,
-                        num_supp_per_batch=args.num_classes_per_batch_support, 
-                        include_support=include_support,
-                        subsample_size=args.subsample_size)
-  elif args.dataset == 'aircraft':
-    ds = Aircraft(args.batch_size, 
-                        args.test_batch_size,
-                        transform_train=transform_train,
-                        transform_test=transform_test,
-                        num_supp_per_batch=args.num_classes_per_batch_support, 
-                        include_support=include_support,
-                        subsample_size=args.subsample_size)
-  else:
-    raise NotImplementedError()
-  train_loader, val_loader, test_loader = ds.get_loaders()
-  num_classes = ds.num_classes
-
-  # Get network
-  if args.arch == 'resnet18':
-    feat_dim = 512
-    if args.dataset in ['cifar10', 'cifar100']:
-      feature_extractor = load_model('CIFAR_ResNet18', num_classes, args.embed_dim)
+    # Set random seed
+    seed = args.seed
+    if seed > 0:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+    
+    # Set device
+    if torch.cuda.is_available():
+        args.device = torch.device('cuda:'+str(args.gpu_id))
     else:
-      feature_extractor = load_model('resnet18', num_classes, args.embed_dim)
-  elif args.arch == 'densenet121':
-    feat_dim = 1024
+        args.device = torch.device('cpu')
+        print('No GPU detected... Training will be slow!')
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
+
+    # Get transforms
     if args.dataset in ['cifar10', 'cifar100']:
-      feature_extractor = load_model('CIFAR_DenseNet121', num_classes, args.embed_dim)
+        transform_train = transforms.Compose([
+                  # transforms.ToPILImage(),
+                  transforms.RandomCrop(32, padding=4),
+                  transforms.RandomHorizontalFlip(),
+                  transforms.ToTensor(),
+                  transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                ])
+        transform_test = transforms.Compose([
+                  transforms.ToTensor(),
+                  transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                ])
     else:
-      feature_extractor = load_model('densenet121', num_classes, args.embed_dim)
-  else:
-    raise NotImplementedError()
-  
-  if args.train_method == 'fchead':
-    network = FCNet(feature_extractor, 
-                    feat_dim, 
-                    num_classes)
-  elif args.train_method == 'nwhead':
-    network = NWNet(feature_extractor, 
-                    args.test_batch_size,
-                    num_classes)
-  else:
-    raise NotImplementedError()
-  utils.summary(network)
-  network.to(args.device)
+        transform_train = transforms.Compose([
+                  transforms.RandomResizedCrop(224),
+                  transforms.RandomHorizontalFlip(), 
+                  transforms.ToTensor(),
+                  transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+              ])
+        transform_test = transforms.Compose([
+                  transforms.Resize(256),
+                  transforms.CenterCrop(224),
+                  transforms.ToTensor(),
+                  transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
+              ])
+    print('Transforms:\n', transform_train, transform_test)
 
-  # Set loss, optimizer, and scheduler
-  criterion = loss_ops.NLLLoss()
-  optimizer = torch.optim.SGD(network.parameters(), 
-                              lr=args.lr, 
-                              momentum=0.9, 
-                              weight_decay=args.weight_decay, 
-                              nesterov=True)
-  scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                         milestones=args.scheduler_milestones,
-                         gamma=args.scheduler_gamma)
+    # Get dataloaders
+    if args.dataset in ['cifar10', 'cifar100']:
+        root_path = '/share/sablab/nfs04/data/cifar/'
+        train_dataset = datasets.CIFAR10(root_path, True, transform_train, download=True)
+        val_dataset = datasets.CIFAR10(root_path, False, transform_test, download=True)
+        train_dataset.num_classes = 10
+    elif args.dataset == 'bird':
+        train_dataset = Cub200Dataset(True, transform_train)
+        val_dataset = Cub200Dataset(False, transform_test)
+    elif args.dataset == 'dog':
+        train_dataset = StanfordDogDataset(True, transform_train)
+        val_dataset = StanfordDogDataset(False, transform_test)
+    elif args.dataset == 'flower':
+        root_path = '/share/sablab/nfs04/data/OxfordFlowers/'
+        train_dataset = datasets.Flowers102(root_path, 'train', transform_train, download=True)
+        val_dataset = datasets.Flowers102(root_path, 'test', transform_test, download=True)
+        train_dataset.num_classes = 102
+        train_dataset.targets = train_dataset._labels
+    elif args.dataset == 'aircraft':
+        root_path = '/share/sablab/nfs04/data/FGVCAircraft/fgvc-aircraft-2013b/'
+        train_dataset = datasets.FGVCAircraft(root_path, 'trainval', transform_train, download=True)
+        val_dataset = datasets.FGVCAircraft(root_path, 'test', transform_test, download=True)
+        train_dataset.num_classes = 100
+    else:
+      raise NotImplementedError()
 
-  
-  # Tracking metrics
-  list_of_metrics = [
-      'loss:train',
-      'acc:train',
-  ]
-  list_of_val_metrics = [
-      'loss:val',
-      'acc:val',
-  ] 
-  args.metrics = {}
-  args.metrics.update({key: Metric() for key in list_of_metrics})
-  args.val_metrics = {}
-  args.val_metrics.update({key: Metric() for key in list_of_val_metrics})
+    train_loader = torch.utils.data.DataLoader(
+      train_dataset, batch_size=args.batch_size, shuffle=True,
+      num_workers=args.workers, pin_memory=True)
 
-  # Training loop
-  start_epoch = 1
-  best_acc1 = 0
-  for epoch in range(start_epoch, args.num_epochs+1):
-    train_epoch(train_loader, network, criterion, optimizer, args)
-    acc1 = eval_epoch(val_loader, network, criterion, optimizer, args)
-    scheduler.step()
+    val_loader = torch.utils.data.DataLoader(
+      val_dataset, batch_size=args.batch_size, shuffle=False,
+      num_workers=args.workers, pin_memory=True)
+    num_classes = train_dataset.num_classes
 
-    # Remember best acc and save checkpoint
-    is_best = acc1 > best_acc1
-    best_acc1 = max(acc1, best_acc1)
+    # Get network
+    if args.arch == 'resnet18':
+        feat_dim = 512
+        if args.dataset in ['cifar10', 'cifar100']:
+            feature_extractor = load_model('CIFAR_ResNet18', num_classes, args.embed_dim)
+        else:
+            feature_extractor = load_model('resnet18', num_classes, args.embed_dim)
+    elif args.arch == 'resnet18pretrained':
+        feat_dim = 512
+        if args.dataset in ['cifar10', 'cifar100']:
+            feature_extractor = load_model('CIFAR_ResNet18', num_classes, args.embed_dim, pretrained=True)
+        else:
+            feature_extractor = load_model('resnet18', num_classes, args.embed_dim, pretrained=True, include_classifier=False)
+    elif args.arch == 'densenet121':
+        feat_dim = 1024
+        if args.dataset in ['cifar10', 'cifar100']:
+            feature_extractor = load_model('CIFAR_DenseNet121', num_classes, args.embed_dim)
+        else:
+            feature_extractor = load_model('densenet121', num_classes, args.embed_dim)
+    elif args.arch == 'densenet121pretrained':
+        feat_dim = 1024
+        if args.dataset in ['cifar10', 'cifar100']:
+            feature_extractor = load_model('CIFAR_DenseNet121', num_classes, args.embed_dim, pretrained=True)
+        else:
+            feature_extractor = load_model('densenet121', num_classes, args.embed_dim, pretrained=True)
+    elif args.arch == 'vit_b_16':
+        feature_extractor = torchvision.models.get_model(args.arch, weights='IMAGENET1K_V1', num_classes=1000)
+        feature_extractor.heads = torch.nn.Identity()
+        feat_dim = 768
+    elif args.arch == 'supcon_resnet50':
+        feat_dim = 2048
+        feature_extractor = load_model('supcon_resnet50', num_classes, pretrained=True)
+    elif args.arch == 'moco_resnet50':
+        feat_dim = 2048
+        feature_extractor = load_model('moco_resnet50', num_classes, pretrained=True)
+        feature_extractor.fc = torch.nn.Identity()
+    elif args.arch == 'dinov2_vits14':
+        feat_dim = 384
+        feature_extractor = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+    else:
+        raise NotImplementedError
+    print(feature_extractor)
+    
+    if args.train_method == 'fchead':
+        network = FCNet(feature_extractor, 
+                        feat_dim, 
+                        num_classes,
+                        use_nll_loss=args.use_nll_loss,
+                        freeze_featurizer=args.freeze_featurizer)
+    elif args.train_method == 'nwhead':
+        network = NWNet(feature_extractor, 
+                        train_dataset,
+                        num_classes,
+                        feat_dim,
+                        kernel_type=args.kernel_type,
+                        subsample_classes=args.subsample_classes,
+                        embed_dim=args.embed_dim,
+                        add_bias=args.add_bias,
+                        length_normalize=args.length_normalize,
+                        freeze_featurizer=args.freeze_featurizer,
+                        apply_softfeatmask=args.apply_softfeatmask,
+                        debug_mode=args.debug_mode,
+                        use_nll_loss=args.use_nll_loss)
+    else:
+        raise NotImplementedError()
+    summary(network)
+    network.to(args.device)
 
-    if epoch % args.log_interval == 0:
-      utils.save_checkpoint(epoch, network, optimizer,
-                  args.ckpt_dir, scheduler, is_best=is_best)
-    print('Epoch:', epoch)
-    print("Train loss={:.6f}, train acc={:.6f}, lr={:.6f}".format(
-        args.metrics['loss:train'].result(), args.metrics['acc:train'].result(), scheduler.get_last_lr()[0]))
-    print("Val loss={:.6f}, val acc={:.6f}".format(
-        args.val_metrics['loss:val'].result(), args.val_metrics['acc:val'].result()))
-    print()
+    # Set loss, optimizer, and scheduler
+    if args.use_nll_loss:
+        criterion = torch.nn.NLLLoss()
+    else:
+        criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(network.parameters(), 
+                                lr=args.lr, 
+                                momentum=0.9, 
+                                weight_decay=args.weight_decay, 
+                                nesterov=True)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                          milestones=args.scheduler_milestones,
+                          gamma=args.scheduler_gamma)
 
-    # Reset metrics
-    for _, metric in args.metrics.items():
-      metric.reset_state()
-    for _, metric in args.val_metrics.items():
-      metric.reset_state()
+    
+    # Tracking metrics
+    list_of_metrics = [
+        'loss:train',
+        'acc:train',
+    ]
+    if args.train_method == 'nwhead':
+        list_of_val_metrics = [
+            'loss:val:random',
+            'loss:val:full',
+            'loss:val:cluster',
+            'acc:val:random',
+            'acc:val:full',
+            'acc:val:cluster',
+        ] 
+    else:
+        list_of_val_metrics = [
+            'loss:val',
+            'acc:val',
+        ] 
+    args.metrics = {}
+    args.metrics.update({key: Metric() for key in list_of_metrics})
+    args.val_metrics = {}
+    args.val_metrics.update({key: Metric() for key in list_of_val_metrics})
+
+    if args.use_wandb:
+        initialize_wandb(args)
+
+    # Training loop
+    start_epoch = 1
+    best_acc1 = 0
+    for epoch in range(start_epoch, args.num_epochs+1):
+        if args.train_method == 'nwhead':
+            network.eval()
+            network.precompute()
+            eval_epoch(val_loader, network, criterion, optimizer, args, mode='random')
+            acc1 = eval_epoch(val_loader, network, criterion, optimizer, args, mode='full')
+            eval_epoch(val_loader, network, criterion, optimizer, args, mode='cluster')
+        else:
+            acc1 = eval_epoch(val_loader, network, criterion, optimizer, args)
+
+        train_epoch(train_loader, network, criterion, optimizer, args)
+        scheduler.step()
+
+        # Remember best acc and save checkpoint
+        is_best = acc1 > best_acc1
+        best_acc1 = max(acc1, best_acc1)
+
+        if epoch % args.log_interval == 0:
+            save_checkpoint(epoch, network, optimizer,
+                      args.ckpt_dir, scheduler, is_best=is_best)
+        print('Epoch:', epoch)
+        print("Train loss={:.6f}, train acc={:.6f}, lr={:.6f}".format(
+            args.metrics['loss:train'].result(), args.metrics['acc:train'].result(), scheduler.get_last_lr()[0]))
+        if args.train_method == 'fchead':
+            print("Val loss={:.6f}, val acc={:.6f}".format(
+                args.val_metrics['loss:val'].result(), args.val_metrics['acc:val'].result()))
+            print()
+        else:
+            print("Val loss={:.6f}, val acc={:.6f}".format(
+                args.val_metrics['loss:val:random'].result(), args.val_metrics['acc:val:random'].result()))
+            print("Val loss={:.6f}, val acc={:.6f}".format(
+                args.val_metrics['loss:val:full'].result(), args.val_metrics['acc:val:full'].result()))
+            print("Val loss={:.6f}, val acc={:.6f}".format(
+                args.val_metrics['loss:val:cluster'].result(), args.val_metrics['acc:val:cluster'].result()))
+            print()
+
+        if args.use_wandb:
+            wandb.log({k: v.result() for k, v in args.metrics.items()})
+            wandb.log({k: v.result() for k, v in args.val_metrics.items()})
+
+        # Reset metrics
+        for _, metric in args.metrics.items():
+            metric.reset_state()
+        for _, metric in args.val_metrics.items():
+            metric.reset_state()
 
 def train_epoch(train_loader, network, criterion, optimizer, args):
-  """Train for one epoch."""
-  network.train()
+    """Train for one epoch."""
+    network.train()
 
-  for i, batch in tqdm(enumerate(train_loader), 
-    total=min(len(train_loader), args.num_steps_per_epoch)):
+    for i, batch in tqdm(enumerate(train_loader), 
+        total=min(len(train_loader), args.num_steps_per_epoch)):
+        if args.train_method == 'fchead':
+            loss, acc, batch_size = fc_train_val_step(batch, network, criterion, optimizer, args, is_train=True)
+        else:
+            loss, acc, batch_size = nw_train_step(batch, network, criterion, optimizer, args)
+        args.metrics['loss:train'].update_state(loss, batch_size)
+        args.metrics['acc:train'].update_state(acc, batch_size)
+        if i == args.num_steps_per_epoch:
+            break
+
+def eval_epoch(val_loader, network, criterion, optimizer, args, mode='random'):
+    '''Eval for one epoch.'''
+    network.eval()
+
+    for i, batch in tqdm(enumerate(val_loader), 
+        total=min(len(val_loader), args.num_val_steps_per_epoch)):
+        if args.train_method == 'fchead':
+            loss, acc, batch_size = fc_train_val_step(batch, network, criterion, optimizer, args, is_train=False)
+            args.val_metrics['loss:val'].update_state(loss, batch_size)
+            args.val_metrics['acc:val'].update_state(acc, batch_size)
+        else:
+            loss, acc, batch_size = nw_val_step(batch, network, criterion, optimizer, args, mode=mode)
+            args.val_metrics[f'loss:val:{mode}'].update_state(loss, batch_size)
+            args.val_metrics[f'acc:val:{mode}'].update_state(acc, batch_size)
+        if i == args.num_val_steps_per_epoch:
+            break
     if args.train_method == 'fchead':
-      loss, acc, batch_size = fc_train_val_step(batch, network, criterion, optimizer, args, is_train=True)
+        return args.val_metrics['acc:val'].result()
     else:
-      loss, acc, batch_size = nw_train_val_step(batch, network, criterion, optimizer, args, is_train=True)
-    args.metrics['loss:train'].update_state(loss, batch_size)
-    args.metrics['acc:train'].update_state(acc, batch_size)
-    if i == args.num_steps_per_epoch:
-      break
-
-def eval_epoch(val_loader, network, criterion, optimizer, args):
-  '''Eval for one epoch.'''
-  network.eval()
-
-  for i, batch in tqdm(enumerate(val_loader), 
-    total=min(len(val_loader), args.num_val_steps_per_epoch)):
-    if args.train_method == 'fchead':
-      loss, acc, batch_size = fc_train_val_step(batch, network, criterion, optimizer, args, is_train=False)
-    else:
-      loss, acc, batch_size = nw_train_val_step(batch, network, criterion, optimizer, args, is_train=False)
-    args.val_metrics['loss:val'].update_state(loss, batch_size)
-    args.val_metrics['acc:val'].update_state(acc, batch_size)
-    if i == args.num_val_steps_per_epoch:
-      break
-  return args.val_metrics['acc:val'].result()
+        return args.val_metrics[f'acc:val:{mode}'].result()
 
 def fc_train_val_step(batch, network, criterion, optimizer, args, is_train=True):
-  '''Train/val for one step.'''
-  img, label, _ = batch
-  img = img.float().to(args.device)
-  label = label.float().to(args.device)
-  optimizer.zero_grad()
-  with torch.set_grad_enabled(is_train):
-    output = network(img)
-    loss = criterion(output, label)
-    if is_train:
-      loss.backward()
-      optimizer.step()
-    acc = metric.acc(output, label)
-
-  return loss.cpu().detach().numpy(), acc, len(img)
-
-def nw_train_val_step(batch, network, criterion, optimizer, args, is_train=True):
     '''Train/val for one step.'''
-    def prepare_batch(batch):
-      img, label, idx = batch
-      img = img.float().to(args.device)
-      label = label.float().to(args.device)
-      return img, label, idx
-    
-    qbatch, sbatch = batch
-    qimg, qlabel, _ = prepare_batch(qbatch)
-    simg, slabel, _ = prepare_batch(sbatch)
+    img, label = batch
+    img = img.float().to(args.device)
+    label = label.to(args.device)
     optimizer.zero_grad()
     with torch.set_grad_enabled(is_train):
-      output = network(qimg, simg, slabel)
-      loss = criterion(output, qlabel)
-      if is_train:
+        output = network(img)
+        loss = criterion(output, label)
+        if is_train:
+            loss.backward()
+            optimizer.step()
+        acc = metric.acc(output.argmax(-1), label)
+
+    return loss.cpu().detach().numpy(), acc, len(img)
+
+def nw_train_step(batch, network, criterion, optimizer, args):
+    '''Train for one step.'''
+    img, label = batch
+    img = img.float().to(args.device)
+    label = label.to(args.device)
+    optimizer.zero_grad()
+    with torch.set_grad_enabled(True):
+        output = network(img, label)[0]
+        loss = criterion(output, label)
         loss.backward()
         optimizer.step()
-      acc = metric.acc(output, qlabel)
+        acc = metric.acc(output.argmax(-1), label)
 
-    return loss.cpu().detach().numpy(), acc, len(qimg)
+    return loss.cpu().detach().numpy(), acc, len(img)
+
+def nw_val_step(batch, network, criterion, optimizer, args, mode='random'):
+    '''Val for one step.'''
+    img, label = batch
+    img = img.float().to(args.device)
+    label = label.to(args.device)
+    optimizer.zero_grad()
+    with torch.set_grad_enabled(False):
+        output = network.predict(img, mode)[0]
+        loss = criterion(output, label)
+        acc = metric.acc(output.argmax(-1), label)
+
+    return loss.cpu().detach().numpy(), acc, len(img)
 
 if __name__ == '__main__':
-  main()
+    main()
