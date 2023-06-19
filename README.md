@@ -150,6 +150,7 @@ python train.py \
   --num_epochs 1000 \
   --scheduler_milestones 500 750 \ # Epoch milestones to decrease lr via scheduler
 ```
+This script will train for 1000 epochs and perform evaluation at the end of each epoch using random, full, and cluster inference modes.
 
 ## Requirements
 This code was run and tested on an Nvidia A6000 GPU with the following dependencies:
