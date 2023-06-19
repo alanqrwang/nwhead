@@ -98,7 +98,7 @@ for img, label in val_loader:
 
 ## Interpretability and Explainability
 ### Interpretablity via weights
-In particular, ranking support images by the `scores` variable enables sorting the support images by similarity, as in this figure:
+Ranking support images by the `scores` variable enables sorting the support images by similarity, as in this figure:
 ![Similarities](figs/weights.png)
 
 ### Explainability via support influence
