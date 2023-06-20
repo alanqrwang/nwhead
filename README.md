@@ -34,7 +34,7 @@ class NWHead(nn.Module):
 ## Usage
 The submodule in `nwhead/` is designed to be portable, so that it can be inserted in an existing project flexibly.
 An example of usage can be found in `train.py`.
-For example, to train an NW head:
+For example, to train an NW head with ResNet-18 backbone:
 
 ```
 import torch
@@ -97,40 +97,40 @@ for img, label in val_loader:
 
 ## Interpretability and Explainability
 ### Interpretablity via weights
-In particular, ranking support images by the `scores` variable enables sorting the support images by similarity, as in this figure:
+Ranking support images by the `scores` variable enables sorting the support images by similarity, as in this figure:
 ![Similarities](figs/weights.png)
 
 ### Explainability via support influence
-The NW head naturally lends itself to a notion of “support influence" (Section 3.4 in the paper) which finds the most helpful and most harmful examples in the support set for a given query image. The function to compute this is given in `util/metric.py`:
+The NW head naturally lends itself to a notion of “support influence" (Section 3.4 in the [paper](https://arxiv.org/pdf/2212.03411.pdf)) which finds the most helpful and most harmful examples in the support set for a given query image. The function to compute this is given in `util/metric.py`:
 ```
 def support_influence(softmaxes, qlabels, sweights, slabels):
-  '''
-  Influence is defined as L(rescaled_softmax, qlabel) - L(softmax, qlabel).
-  Positive influence => removing support image increases loss => support image was helpful
-  Negative influence => removing support image decreases loss => support image was harmful
-  bs should be 1.
-  
-  softmaxes: (bs, num_classes)
-  qlabel: One-hot encoded query label (bs, num_classes)
-  sweights: Weights between query and each support (bs, num_support)
-  slabels: One-hot encoded support label (bs, num_support, num_classes)
-  '''
-  batch_influences = []
-  bs = len(softmaxes)
-  for bid in range(bs):
-    softmax = softmaxes[bid]
-    qlabel = qlabels[bid]
-    sweight = sweights[bid]
-
-    qlabel_cat = qlabel.argmax(-1).item()
-    slabels_cat = slabels.argmax(-1)
+    '''
+    Influence is defined as L(rescaled_softmax, qlabel) - L(softmax, qlabel).
+    Positive influence => removing support image increases loss => support image was helpful
+    Negative influence => removing support image decreases loss => support image was harmful
+    bs should be 1.
     
-    p = softmax[qlabel_cat]
-    indicator = (slabels_cat==qlabel_cat).long()
-    influences = torch.log((p - p*sweight)/(p - sweight*indicator))
-
-    batch_influences.append(influences[None])
-  return torch.cat(batch_influences, dim=0)
+    softmaxes: (bs, num_classes)
+    qlabel: One-hot encoded query label (bs, num_classes)
+    sweights: Weights between query and each support (bs, num_support)
+    slabels: One-hot encoded support label (bs, num_support, num_classes)
+    '''
+    batch_influences = []
+    bs = len(softmaxes)
+    for bid in range(bs):
+        softmax = softmaxes[bid]
+        qlabel = qlabels[bid]
+        sweight = sweights[bid]
+        
+        qlabel_cat = qlabel.argmax(-1).item()
+        slabels_cat = slabels.argmax(-1)
+        
+        p = softmax[qlabel_cat]
+        indicator = (slabels_cat==qlabel_cat).long()
+        influences = torch.log((p - p*sweight)/(p - sweight*indicator))
+    
+        batch_influences.append(influences[None])
+    return torch.cat(batch_influences, dim=0)
 ```
 
 This figure shows results of ranking support images using support influence by most helpful and most harmful: 
@@ -149,6 +149,8 @@ python train.py \
   --num_epochs 1000 \
   --scheduler_milestones 500 750 \ # Epoch milestones to decrease lr via scheduler
 ```
+This script will train for 1000 epochs and perform evaluation at the end of each epoch using random, full, and cluster inference modes.
+Optionally, toggle the `--use_wandb` flag to log training results to Weights & Biases.
 
 ## Requirements
 This code was run and tested on an Nvidia A6000 GPU with the following dependencies:
