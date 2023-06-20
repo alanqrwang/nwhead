@@ -141,6 +141,7 @@ Example command for training NW head:
 ```
 python train.py \
   --models_dir out/ \ # Directory to save model outputs
+  --data_dir ... \ # Directory where dataset lives
   --dataset bird  \ # Dataset to use
   --arch resnet18 \ # Feature extractor, $g_\theta$ in paper
   --train_method nwhead \ # Model to train, choose from [fchead, nwhead]

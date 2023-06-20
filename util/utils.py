@@ -15,6 +15,9 @@ def summary(network):
     print()
     print('Model Summary')
     print('---------------------------------------------------------------')
+    print(network)
+    print()
+    print('Trainable parameters')
     for name, param in network.named_parameters():
         if param.requires_grad:
             print(name)

@@ -2,27 +2,25 @@ import os
 import pandas as pd
 import torch
 import numpy as np
-import csv
 from PIL import Image
 
-root_path = '/share/sablab/nfs04/data/StanfordDogs/'
-
 class StanfordDogDataset(torch.utils.data.Dataset):
-  def __init__(self, is_train, transform):
+  def __init__(self, root_path, is_train, transform):
     super().__init__()
     self.num_classes = 120
+    self.root_path = root_path
     self.is_train = is_train
     self.transform = transform
     self.gather()
   
   def gather(self):
       if self.is_train:
-          file_names = os.path.join(root_path, 'train_list.csv')
+          file_names = os.path.join(self.root_path, 'train_list.csv')
       else:
-          file_names = os.path.join(root_path, 'test_list.csv')
+          file_names = os.path.join(self.root_path, 'test_list.csv')
       df = pd.read_csv(file_names, sep=',', header=None, names=['path', 'label'])
 
-      return [os.path.join(root_path, 'Images', path) for path in df.path.to_numpy()], df.label.to_numpy()-1
+      return [os.path.join(self.root_path, 'Images', path) for path in df.path.to_numpy()], df.label.to_numpy()-1
 
   def __len__(self):
       return len(self.paths)

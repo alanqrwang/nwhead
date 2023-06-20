@@ -25,6 +25,8 @@ class Parser(argparse.ArgumentParser):
     # I/O parameters
     self.add_argument('--models_dir', default='./',
               type=str, help='directory to save models')
+    self.add_argument('--data_dir', default='./',
+              type=str, help='directory where data lives')
     self.add_argument('--log_interval', type=int,
               default=25, help='Frequency of logs')
     self.add_argument('--workers', type=int, default=0,
@@ -34,7 +36,7 @@ class Parser(argparse.ArgumentParser):
     self.add_bool_arg('debug_mode', False)
 
     # Machine learning parameters
-    self.add_argument('--dataset', type=str, default='cifar10')
+    self.add_argument('--dataset', type=str, required=True)
     self.add_argument('--lr', type=float, default=1e-3,
               help='Learning rate')
     self.add_argument('--batch_size', type=int,
@@ -159,27 +161,25 @@ def main():
 
     # Get dataloaders
     if args.dataset in ['cifar10', 'cifar100']:
-        root_path = '/share/sablab/nfs04/data/cifar/'
-        train_dataset = datasets.CIFAR10(root_path, True, transform_train, download=True)
-        val_dataset = datasets.CIFAR10(root_path, False, transform_test, download=True)
+        train_dataset = datasets.CIFAR10(args.data_dir, True, transform_train, download=True)
+        val_dataset = datasets.CIFAR10(args.data_dir, False, transform_test, download=True)
         train_dataset.num_classes = 10
     elif args.dataset == 'bird':
-        train_dataset = Cub200Dataset(True, transform_train)
-        val_dataset = Cub200Dataset(False, transform_test)
+        train_dataset = Cub200Dataset(args.data_dir, True, transform_train)
+        val_dataset = Cub200Dataset(args.data_dir, False, transform_test)
     elif args.dataset == 'dog':
-        train_dataset = StanfordDogDataset(True, transform_train)
-        val_dataset = StanfordDogDataset(False, transform_test)
+        train_dataset = StanfordDogDataset(args.data_dir, True, transform_train)
+        val_dataset = StanfordDogDataset(args.data_dir, False, transform_test)
     elif args.dataset == 'flower':
-        root_path = '/share/sablab/nfs04/data/OxfordFlowers/'
-        train_dataset = datasets.Flowers102(root_path, 'train', transform_train, download=True)
-        val_dataset = datasets.Flowers102(root_path, 'test', transform_test, download=True)
+        train_dataset = datasets.Flowers102(args.data_dir, 'train', transform_train, download=True)
+        val_dataset = datasets.Flowers102(args.data_dir, 'test', transform_test, download=True)
         train_dataset.num_classes = 102
         train_dataset.targets = train_dataset._labels
     elif args.dataset == 'aircraft':
-        root_path = '/share/sablab/nfs04/data/FGVCAircraft/fgvc-aircraft-2013b/'
-        train_dataset = datasets.FGVCAircraft(root_path, 'trainval', transform_train, download=True)
-        val_dataset = datasets.FGVCAircraft(root_path, 'test', transform_test, download=True)
+        train_dataset = datasets.FGVCAircraft(args.data_dir, 'trainval', transform_train, download=True)
+        val_dataset = datasets.FGVCAircraft(args.data_dir, 'test', transform_test, download=True)
         train_dataset.num_classes = 100
+        train_dataset.targets = train_dataset._labels
     else:
       raise NotImplementedError()
 
@@ -207,7 +207,6 @@ def main():
             feature_extractor = load_model('densenet121', num_classes, args.embed_dim)
     else:
         raise NotImplementedError
-    print(feature_extractor)
     
     if args.train_method == 'fchead':
         network = FCNet(feature_extractor, 
