@@ -34,7 +34,6 @@ class NWHead(nn.Module):
 ## Usage
 The submodule in `nwhead/` is designed to be portable, so that it can be inserted in an existing project flexibly.
 An example of usage can be found in `train.py`.
-Interfacing with the NW head is designed to be as seamless as possible. 
 For example, to train an NW head:
 
 ```

@@ -63,7 +63,7 @@ class Parser(argparse.ArgumentParser):
               help='Kernel type')
     self.add_argument('--embed_dim', type=int,
               default=0)
-    self.add_argument('--num_classes_per_batch_support', type=int,
+    self.add_argument('--supp_num_per_class', type=int,
               default=1)
     self.add_argument('--subsample_classes', type=int,
               default=None, help='size of subsample sampler')
@@ -220,6 +220,7 @@ def main():
                         num_classes,
                         feat_dim,
                         kernel_type=args.kernel_type,
+                        num_per_class=args.supp_num_per_class,
                         subsample_classes=args.subsample_classes,
                         embed_dim=args.embed_dim,
                         debug_mode=args.debug_mode,
