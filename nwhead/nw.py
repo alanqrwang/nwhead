@@ -16,23 +16,41 @@ class NWNet(nn.Module):
                  feat_dim,
                  kernel_type='euclidean', 
                  train_type='random', 
-                 env_array=None, 
                  num_per_class=1, 
                  total_per_class=100,
                  subsample_classes=None,
                  num_clusters=3,
                  embed_dim=0, 
+                 env_array=None, 
                  debug_mode=False,
-                 device='cuda:0', 
                  use_nll_loss=False
+                 device='cuda:0', 
                  ):
-        '''Top level NW net class. Creates kernel, NWHead, and support set as modules.
+        '''
+        Top level NW net class. Creates kernel, NWHead, and SupportSet as modules.
 
-        Args:
-            featurizer: Feature extractor
-            support_dataset: Pytorch Dataset object. Assumes has attributes
-                .targets containing categorical classes of dataset.
-            d_out: Output dimension of featurizer'''
+        :param featurizer: Feature extractor
+        :param support_dataset: Pytorch Dataset object. Assumes has attributes
+            .targets containing categorical classes of dataset.
+        :param num_classes: Number of classes in dataset
+        :param feat_dim: Output dimension of featurizer
+        :param kernel_type: Type of kernel to use
+        :param train_type: Type of training strategy
+        :param num_per_class: Number of datapoints per class to sample for support
+            during training
+        :param total_per_class: Number of datapoints per class to use for full
+            inference
+        :param subsample_classes: Subsample number of classes to put in support
+            (use for large number of classes)
+        :param num_clusters: Number of cluster centroids per class for cluster inference
+        :param embed_dim: If > 0, adds a linear projection to embed_dim after featurizer
+        :param env_array: Array of same length as support dataset containing
+            environment indicators
+        :param debug_mode: If set, prints some debugging info and plots images
+        :param use_nll_loss: If set, returns log of probabilities as output, for use
+            with NLLLoss()
+        :param device: Device used for computation
+        '''
         super(NWNet, self).__init__()
         self.featurizer = featurizer
         self.train_type = train_type
@@ -132,7 +150,6 @@ class NWNet(nn.Module):
             return output.exp()
 
     def _compute_all_support_feats(self, save=False):
-        # print('Precomputing all features in support dataset...')
         feats = []
         labels = []
         meta = []
@@ -163,18 +180,6 @@ class NWNet(nn.Module):
         labels = torch.cat(labels, dim=0)
         meta = torch.cat(meta, dim=0)
 
-        # if save:
-        #     print('Saving embeddings...')
-        #     root_dir = os.path.join(self.run_dir, 'embedding')
-        #     if not os.path.exists(root_dir):
-        #         os.makedirs(root_dir)
-        #     embedding_path = os.path.join(root_dir, 'embeddings.npy')
-        #     label_path = os.path.join(root_dir, 'labels.npy')
-        #     metadata_path = os.path.join(root_dir, 'metadata.npy')
-        #     np.save(embedding_path, embeddings.cpu().detach().numpy())
-        #     np.save(label_path, labels.cpu().detach().numpy())
-        #     np.save(metadata_path, metadata.cpu().detach().numpy())
-
         return feats, labels, meta, separated_feats, separated_labels, separated_meta
 
 class NWHead(nn.Module):
@@ -199,16 +204,11 @@ class NWHead(nn.Module):
 
     def forward(self, x, support_x, support_y):
         """
-        Computes Nadaraya-Watson head on query, key and value tensors.
-        Args:
-            q: query (b, embed_dim)
-            k: key (b, num_support, embed_dim)
-            v: labels (b, num_support, num_classes)
-
-        Output:
-            output: softmaxed probabilities (b, num_classes)
-            attn_probs: Weights per support element, (b, num_support)
-            attn_scores: Scores per support element, (b, num_support)
+        Computes Nadaraya-Watson head given query x, support x, and support y tensors.
+        :param x: (b, embed_dim)
+        :param support_x: (b, num_support, embed_dim)
+        :param support_y: (b, num_support, num_classes)
+        :return: softmaxed probabilities (b, num_classes)
         """
         x = x.unsqueeze(1)
         if self.embed_dim > 0:

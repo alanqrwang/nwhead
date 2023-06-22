@@ -6,11 +6,7 @@ from sklearn.cluster import KMeans
 from .utils import DatasetMetadata, FeatureDataset, UniformClassLoader, InfiniteUniformClassLoader, InfiniteRandomLoader
 
 class SupportSet:
-    '''Support set for NW. 
-    
-    Args:
-        support_set: Pytorch dataset with .targets attribute, and __getitem__
-                     returns input and target as first two elements in tuple'''
+    '''Support set for NW.'''
     def __init__(self, 
                  support_set, 
                  train_type, 
@@ -160,8 +156,8 @@ class SupportSet:
     def _compute_clusters(self, num_clusters=3, closest=False):
         '''Performs k-means clustering to find support set.
         
-        Args:
-        in_support: If True, uses support embeddings closest to cluster centroids. Otherwise,
+        :param num_clusters: Number of cluster centroids per class.
+        :param closest: If True, uses support features closest to cluster centroids. Otherwise,
                     uses true cluster centroids.
         '''
         embeddings = self.full_feat
