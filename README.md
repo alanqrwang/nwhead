@@ -1,5 +1,5 @@
 # Nadaraya-Watson (NW) Head
-Repository containing training and evaluation code for the NW head -- an interpretable/explainable, nonparametric classification head which can be used with any neural network.
+Repository containing training and evaluation code for the NW head - an interpretable/explainable, nonparametric classification head which can be used with any neural network.
 ![Architecture](figs/arch.png)
 [link to paper](https://openreview.net/forum?id=iEq6lhG4O3)
 
