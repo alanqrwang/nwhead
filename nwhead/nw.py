@@ -13,7 +13,7 @@ class NWNet(nn.Module):
                  featurizer, 
                  support_dataset, 
                  num_classes,
-                 feat_dim,
+                 feat_dim=None,
                  kernel_type='euclidean', 
                  train_type='random', 
                  num_per_class=1, 
@@ -185,7 +185,7 @@ class NWNet(nn.Module):
 class NWHead(nn.Module):
     def __init__(self, 
                  kernel, 
-                 feat_dim,
+                 feat_dim=None,
                  embed_dim=0, 
                  device='cuda:0', 
                  dtype=torch.float32):
@@ -195,6 +195,7 @@ class NWHead(nn.Module):
         self.embed_dim = embed_dim
 
         if self.embed_dim > 0:
+            assert feat_dim is not None, 'Feature dimension must be specified'
             self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, embed_dim), **factory_kwargs))
             xavier_uniform_(self.proj_weight)
         
