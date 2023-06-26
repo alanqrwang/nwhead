@@ -23,7 +23,7 @@ class NWNet(nn.Module):
                  embed_dim=0, 
                  env_array=None, 
                  debug_mode=False,
-                 use_nll_loss=False
+                 use_nll_loss=False,
                  device='cuda:0', 
                  ):
         '''
