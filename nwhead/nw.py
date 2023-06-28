@@ -24,7 +24,7 @@ class NWNet(nn.Module):
                  total_per_class=100,
                  subsample_classes=None,
                  num_clusters=3,
-                 embed_dim=0, 
+                 proj_dim=0, 
                  env_array=None, 
                  debug_mode=False,
                  device='cuda:0', 
@@ -46,7 +46,7 @@ class NWNet(nn.Module):
         :param subsample_classes: Subsample number of classes to put in support
             (use for large number of classes)
         :param num_clusters: Number of cluster centroids per class for cluster inference
-        :param embed_dim: If > 0, adds a linear projection to embed_dim after featurizer
+        :param proj_dim: If > 0, adds a linear projection down to proj_dim after featurizer
         :param env_array: Array of same length as support dataset containing
             environment indicators
         :param debug_mode: If set, prints some debugging info and plots images
@@ -66,7 +66,7 @@ class NWNet(nn.Module):
         # NW Head
         self.nwhead = NWHead(kernel=kernel,
                              feat_dim=feat_dim,
-                             embed_dim=embed_dim)
+                             proj_dim=proj_dim)
 
         # Support dataset
         self.sset = SupportSet(support_dataset,
@@ -193,35 +193,43 @@ class NWHead(nn.Module):
     def __init__(self, 
                  kernel, 
                  feat_dim=None,
-                 embed_dim=0, 
+                 proj_dim=0, 
+                 add_bias=True,
                  device='cuda:0', 
                  dtype=torch.float32):
         super(NWHead, self).__init__()
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
-        self.embed_dim = embed_dim
+        self.proj_dim = proj_dim
+        self.add_bias = add_bias
 
-        if self.embed_dim > 0:
+        if self.proj_dim > 0:
             assert feat_dim is not None, 'Feature dimension must be specified'
-            self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, embed_dim), **factory_kwargs))
+            self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, proj_dim), **factory_kwargs))
             xavier_uniform_(self.proj_weight)
+            if self.add_bias:
+                self.proj_bias = nn.Parameter(torch.randn((1, 1, proj_dim), **factory_kwargs))
+                xavier_uniform_(self.proj_bias)
         
-    def embed(self, x):
+    def project(self, x):
         bs = len(x)
-        return torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
+        proj = torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
+        if self.add_bias:
+            proj = proj + self.proj_bias
+        return proj
 
     def forward(self, x, support_x, support_y):
         """
         Computes Nadaraya-Watson head given query x, support x, and support y tensors.
-        :param x: (b, embed_dim)
-        :param support_x: (b, num_support, embed_dim)
+        :param x: (b, proj_dim)
+        :param support_x: (b, num_support, proj_dim)
         :param support_y: (b, num_support, num_classes)
         :return: softmaxed probabilities (b, num_classes)
         """
         x = x.unsqueeze(1)
-        if self.embed_dim > 0:
-            x = self.embed(x)
-            support_x = self.embed(support_x)
+        if self.proj_dim > 0:
+            x = self.project(x)
+            support_x = self.project(support_x)
 
         scores = self.kernel(x, support_x)
 

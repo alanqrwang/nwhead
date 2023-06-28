@@ -106,8 +106,7 @@ class DenseNet(nn.Module):
     """
 
     def __init__(self, growth_rate=32, block_config=(6, 12, 24, 16),
-                 num_init_features=64, bn_size=4, drop_rate=0, num_classes=1000, memory_efficient=False, bias=True,
-                 embed_dim=0, device='cuda:0', dtype=torch.float32):
+                 num_init_features=64, bn_size=4, drop_rate=0, memory_efficient=False, bias=True):
 
         super(DenseNet, self).__init__()
 
@@ -156,26 +155,11 @@ class DenseNet(nn.Module):
                 if bias:
                     nn.init.constant_(m.bias, 0)
 
-        # Projection
-        self.embed_dim = embed_dim
-        if embed_dim > 0:
-            factory_kwargs = {'device': device, 'dtype': dtype}
-            self.proj_weight = nn.Parameter(torch.empty((1, 1024, embed_dim), **factory_kwargs))
-            xavier_uniform_(self.proj_weight)
-
-    def embed(self, input):
-        bs = len(input)
-        # (B, num_queries, in_dim) x (B, in_dim, embed_dim) -> (B, num_queries, embed_dim)
-        return torch.bmm(input.unsqueeze(1), self.proj_weight.repeat(bs, 1, 1)).squeeze(1)
-
     def forward(self, x):
         features = self.features(x)
         out = F.relu(features, inplace=True)
         out = F.adaptive_avg_pool2d(out, (1, 1))
         out = torch.flatten(out, 1)
-
-        if self.embed_dim > 0:
-            out = self.embed(out)
         return out
 
 

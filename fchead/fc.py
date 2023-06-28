@@ -3,12 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class FCNet(nn.Module):
-    def __init__(self, featurizer, in_dim, num_classes, freeze_featurizer=False):
+    def __init__(self, featurizer, in_dim, num_classes):
         super(FCNet, self).__init__()
         self.featurizer = featurizer
-        if freeze_featurizer:
-            for param in self.featurizer.parameters():
-                param.requires_grad = False
         self.classifier = FCHead(in_dim, out_dim=num_classes)
 
     def extract_feat(self, qimg):

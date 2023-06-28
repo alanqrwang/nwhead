@@ -12,7 +12,7 @@ import wandb
 
 from data.bird import Cub200Dataset
 from data.dog import StanfordDogDataset
-from util.metric import Metric
+from util.metric import Metric, ECELoss
 from util.utils import parse_bool, ParseKwargs, summary, save_checkpoint, initialize_wandb
 from util import metric
 from model import load_model
@@ -58,11 +58,12 @@ class Parser(argparse.ArgumentParser):
     self.add_argument('--arch', type=str, default='resnet18')
     self.add_argument(
       '--train_method', default='nwhead')
+    self.add_bool_arg('freeze_featurizer', False)
 
     # NW head parameters
     self.add_argument('--kernel_type', type=str, default='euclidean',
               help='Kernel type')
-    self.add_argument('--embed_dim', type=int,
+    self.add_argument('--proj_dim', type=int,
               default=0)
     self.add_argument('--supp_num_per_class', type=int,
               default=1)
@@ -86,14 +87,14 @@ class Parser(argparse.ArgumentParser):
   def parse(self):
     args = self.parse_args()
     args.run_dir = os.path.join(args.models_dir,
-                  'method{method}_dataset{dataset}_arch{arch}_lr{lr}_bs{batch_size}_embeddim{embed_dim}_numsupp{numsupp}_subsample{subsample}_wd{wd}_seed{seed}'.format(
+                  'method{method}_dataset{dataset}_arch{arch}_lr{lr}_bs{batch_size}_projdim{proj_dim}_numsupp{numsupp}_subsample{subsample}_wd{wd}_seed{seed}'.format(
                     method=args.train_method,
                     dataset=args.dataset,
                     arch=args.arch,
                     lr=args.lr,
                     batch_size=args.batch_size,
-                    embed_dim=args.embed_dim,
-                    numsupp=args.num_classes_per_batch_support,
+                    proj_dim=args.proj_dim,
+                    numsupp=args.supp_num_per_class,
                     subsample=args.subsample_classes,
                     wd=args.weight_decay,
                     seed=args.seed
@@ -195,31 +196,38 @@ def main():
     if args.arch == 'resnet18':
         feat_dim = 512
         if args.dataset in ['cifar10', 'cifar100']:
-            feature_extractor = load_model('CIFAR_ResNet18', num_classes, args.embed_dim)
+            featurizer = load_model('CIFAR_ResNet18')
         else:
-            feature_extractor = load_model('resnet18', num_classes, args.embed_dim)
+            featurizer = load_model('resnet18')
     elif args.arch == 'densenet121':
         feat_dim = 1024
         if args.dataset in ['cifar10', 'cifar100']:
-            feature_extractor = load_model('CIFAR_DenseNet121', num_classes, args.embed_dim)
+            featurizer = load_model('CIFAR_DenseNet121')
         else:
-            feature_extractor = load_model('densenet121', num_classes, args.embed_dim)
+            featurizer = load_model('densenet121')
+    elif args.arch == 'dinov2_vits14':
+        feat_dim = 384
+        featurizer = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
     else:
         raise NotImplementedError
     
+    if args.freeze_featurizer:
+        for param in featurizer.parameters():
+            param.requires_grad = False
+    
     if args.train_method == 'fchead':
-        network = FCNet(feature_extractor, 
+        network = FCNet(featurizer, 
                         feat_dim, 
                         num_classes)
     elif args.train_method == 'nwhead':
-        network = NWNet(feature_extractor, 
+        network = NWNet(featurizer, 
                         train_dataset,
                         num_classes,
                         feat_dim,
                         kernel_type=args.kernel_type,
                         num_per_class=args.supp_num_per_class,
                         subsample_classes=args.subsample_classes,
-                        embed_dim=args.embed_dim,
+                        proj_dim=args.proj_dim,
                         debug_mode=args.debug_mode)
     else:
         raise NotImplementedError()
@@ -251,11 +259,15 @@ def main():
             'acc:val:random',
             'acc:val:full',
             'acc:val:cluster',
+            'ece:val:random',
+            'ece:val:full',
+            'ece:val:cluster',
         ] 
     else:
         list_of_val_metrics = [
             'loss:val',
             'acc:val',
+            'ece:val',
         ] 
     args.metrics = {}
     args.metrics.update({key: Metric() for key in list_of_metrics})
@@ -269,6 +281,7 @@ def main():
     start_epoch = 1
     best_acc1 = 0
     for epoch in range(start_epoch, args.num_epochs+1):
+        print('Epoch:', epoch)
         if args.train_method == 'nwhead':
             network.eval()
             network.precompute()
@@ -288,7 +301,6 @@ def main():
         if epoch % args.log_interval == 0:
             save_checkpoint(epoch, network, optimizer,
                       args.ckpt_dir, scheduler, is_best=is_best)
-        print('Epoch:', epoch)
         print("Train loss={:.6f}, train acc={:.6f}, lr={:.6f}".format(
             args.metrics['loss:train'].result(), args.metrics['acc:train'].result(), scheduler.get_last_lr()[0]))
         if args.train_method == 'fchead':
@@ -321,11 +333,11 @@ def train_epoch(train_loader, network, criterion, optimizer, args):
     for i, batch in tqdm(enumerate(train_loader), 
         total=min(len(train_loader), args.num_steps_per_epoch)):
         if args.train_method == 'fchead':
-            loss, acc, batch_size = fc_train_val_step(batch, network, criterion, optimizer, args, is_train=True)
+            step_res = fc_step(batch, network, criterion, optimizer, args, is_train=True)
         else:
-            loss, acc, batch_size = nw_train_step(batch, network, criterion, optimizer, args)
-        args.metrics['loss:train'].update_state(loss, batch_size)
-        args.metrics['acc:train'].update_state(acc, batch_size)
+            step_res = nw_step(batch, network, criterion, optimizer, args, is_train=True)
+        args.metrics['loss:train'].update_state(step_res['loss'], step_res['batch_size'])
+        args.metrics['acc:train'].update_state(step_res['acc'], step_res['batch_size'])
         if i == args.num_steps_per_epoch:
             break
 
@@ -333,24 +345,32 @@ def eval_epoch(val_loader, network, criterion, optimizer, args, mode='random'):
     '''Eval for one epoch.'''
     network.eval()
 
+    probs = []
+    gts = []
     for i, batch in tqdm(enumerate(val_loader), 
         total=min(len(val_loader), args.num_val_steps_per_epoch)):
         if args.train_method == 'fchead':
-            loss, acc, batch_size = fc_train_val_step(batch, network, criterion, optimizer, args, is_train=False)
-            args.val_metrics['loss:val'].update_state(loss, batch_size)
-            args.val_metrics['acc:val'].update_state(acc, batch_size)
+            step_res = fc_step(batch, network, criterion, optimizer, args, is_train=False)
+            args.val_metrics['loss:val'].update_state(step_res['loss'], step_res['batch_size'])
+            args.val_metrics['acc:val'].update_state(step_res['acc'], step_res['batch_size'])
         else:
-            loss, acc, batch_size = nw_val_step(batch, network, criterion, optimizer, args, mode=mode)
-            args.val_metrics[f'loss:val:{mode}'].update_state(loss, batch_size)
-            args.val_metrics[f'acc:val:{mode}'].update_state(acc, batch_size)
+            step_res = nw_step(batch, network, criterion, optimizer, args, is_train=False, mode=mode)
+            args.val_metrics[f'loss:val:{mode}'].update_state(step_res['loss'], step_res['batch_size'])
+            args.val_metrics[f'acc:val:{mode}'].update_state(step_res['acc'], step_res['batch_size'])
+        probs.append(step_res['prob'])
+        gts.append(step_res['gt'])
         if i == args.num_val_steps_per_epoch:
             break
+    
+    ece = (ECELoss()(torch.cat(probs, dim=0), torch.cat(gts, dim=0)) * 100).item()
     if args.train_method == 'fchead':
+        args.val_metrics['ece:val'].update_state(ece, 1)
         return args.val_metrics['acc:val'].result()
     else:
+        args.val_metrics[f'ece:val:{mode}'].update_state(ece, 1)
         return args.val_metrics[f'acc:val:{mode}'].result()
 
-def fc_train_val_step(batch, network, criterion, optimizer, args, is_train=True):
+def fc_step(batch, network, criterion, optimizer, args, is_train=True):
     '''Train/val for one step.'''
     img, label = batch
     img = img.float().to(args.device)
@@ -364,35 +384,34 @@ def fc_train_val_step(batch, network, criterion, optimizer, args, is_train=True)
             optimizer.step()
         acc = metric.acc(output.argmax(-1), label)
 
-    return loss.cpu().detach().numpy(), acc, len(img)
+    return {'loss': loss.cpu().detach().numpy(), \
+            'acc': acc*100, \
+            'batch_size': len(img), \
+            'prob': output.exp(), \
+            'gt': label}
 
-def nw_train_step(batch, network, criterion, optimizer, args):
-    '''Train for one step.'''
+def nw_step(batch, network, criterion, optimizer, args, is_train=True, mode='random'):
+    '''Train/val for one step.'''
     img, label = batch
     img = img.float().to(args.device)
     label = label.to(args.device)
     optimizer.zero_grad()
-    with torch.set_grad_enabled(True):
-        output = network(img, label)[0]
+    with torch.set_grad_enabled(is_train):
+        if is_train:
+            output = network(img, label)[0]
+        else:
+            output = network.predict(img, mode)
         loss = criterion(output, label)
-        loss.backward()
-        optimizer.step()
+        if is_train:
+            loss.backward()
+            optimizer.step()
         acc = metric.acc(output.argmax(-1), label)
 
-    return loss.cpu().detach().numpy(), acc, len(img)
-
-def nw_val_step(batch, network, criterion, optimizer, args, mode='random'):
-    '''Val for one step.'''
-    img, label = batch
-    img = img.float().to(args.device)
-    label = label.to(args.device)
-    optimizer.zero_grad()
-    with torch.set_grad_enabled(False):
-        output = network.predict(img, mode)[0]
-        loss = criterion(output, label)
-        acc = metric.acc(output.argmax(-1), label)
-
-    return loss.cpu().detach().numpy(), acc, len(img)
+    return {'loss': loss.cpu().detach().numpy(), \
+            'acc': acc*100, \
+            'batch_size': len(img), \
+            'prob': output.exp(), \
+            'gt': label}
 
 if __name__ == '__main__':
     main()

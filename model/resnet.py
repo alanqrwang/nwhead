@@ -135,9 +135,8 @@ class PreActBlock(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
-                 groups=1, width_per_group=64, norm_layer=None, embed_dim=0, include_classifier=False,
-                 device='cuda:0', dtype=torch.float32):
+    def __init__(self, block, layers, zero_init_residual=False,
+                 groups=1, width_per_group=64, norm_layer=None):
         super(ResNet, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -155,7 +154,6 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2, norm_layer=norm_layer)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2, norm_layer=norm_layer)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        # self.fc = nn.Linear(512 * block.expansion, num_classes)
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
@@ -172,8 +170,6 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
-
-        self.include_classifier = include_classifier
 
     def _make_layer(self, block, planes, blocks, stride=1, norm_layer=None):
         if norm_layer is None:
@@ -208,15 +204,10 @@ class ResNet(nn.Module):
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-
-        if self.include_classifier:
-            x = self.fc(x)
-            x = F.log_softmax(x, dim=-1)
         return x
 
 class CIFAR_ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10, bias=True, 
-                 embed_dim=0, device='cuda:0', dtype=torch.float32):
+    def __init__(self, block, num_blocks):
         super(CIFAR_ResNet, self).__init__()
         self.in_planes = 64
         self.conv1 = conv3x3(3,64)
@@ -225,14 +216,6 @@ class CIFAR_ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-        self.linear = nn.Linear(512*block.expansion, num_classes, bias=bias)
-
-        # Projection
-        self.embed_dim = embed_dim
-        if embed_dim > 0:
-            factory_kwargs = {'device': device, 'dtype': dtype}
-            self.proj_weight = nn.Parameter(torch.empty((1, 512*block.expansion, embed_dim), **factory_kwargs))
-            xavier_uniform_(self.proj_weight)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1]*(num_blocks-1)
@@ -241,11 +224,6 @@ class CIFAR_ResNet(nn.Module):
             layers.append(block(self.in_planes, planes, stride))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
-
-    def embed(self, input):
-        bs = len(input)
-        # (B, num_queries, in_dim) x (B, in_dim, embed_dim) -> (B, num_queries, embed_dim)
-        return torch.bmm(input.unsqueeze(1), self.proj_weight.repeat(bs, 1, 1)).squeeze(1)
 
     def forward(self, x, lin=0, lout=5):
         out = x
@@ -258,9 +236,6 @@ class CIFAR_ResNet(nn.Module):
         out = self.layer4(out3)
         out = F.avg_pool2d(out, 4)
         out4 = out.view(out.size(0), -1)
-
-        if self.embed_dim > 0:
-            out4 = self.embed(out4)
         return out4
 
 

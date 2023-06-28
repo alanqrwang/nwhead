@@ -35,8 +35,7 @@ class Transition(nn.Module):
 
 
 class CIFAR_DenseNet(nn.Module):
-    def __init__(self, block, nblocks, growth_rate=12, reduction=0.5, num_classes=10, bias=True,
-                 embed_dim=0, device='cuda:0', dtype=torch.float32):
+    def __init__(self, block, nblocks, growth_rate=12, reduction=0.5):
         super(CIFAR_DenseNet, self).__init__()
         self.growth_rate = growth_rate
 
@@ -65,14 +64,6 @@ class CIFAR_DenseNet(nn.Module):
         num_planes += nblocks[3]*growth_rate
 
         self.bn = nn.BatchNorm2d(num_planes)
-        self.linear = nn.Linear(num_planes, num_classes, bias=bias)
-
-        # Projection
-        self.embed_dim = embed_dim
-        if embed_dim > 0:
-            factory_kwargs = {'device': device, 'dtype': dtype}
-            self.proj_weight = nn.Parameter(torch.empty((1, 512*block.expansion, embed_dim), **factory_kwargs))
-            xavier_uniform_(self.proj_weight)
 
     def _make_dense_layers(self, block, in_planes, nblock):
         layers = []
@@ -80,11 +71,6 @@ class CIFAR_DenseNet(nn.Module):
             layers.append(block(in_planes, self.growth_rate))
             in_planes += self.growth_rate
         return nn.Sequential(*layers)
-
-    def embed(self, input):
-        bs = len(input)
-        # (B, num_queries, in_dim) x (B, in_dim, embed_dim) -> (B, num_queries, embed_dim)
-        return torch.bmm(input.unsqueeze(1), self.proj_weight.repeat(bs, 1, 1)).squeeze(1)
 
     def forward(self, x):
         out = self.conv1(x)
@@ -94,9 +80,6 @@ class CIFAR_DenseNet(nn.Module):
         out = self.dense4(out)
         out = F.avg_pool2d(F.relu(self.bn(out)), 4)
         out = out.view(out.size(0), -1)
-
-        if self.embed_dim > 0:
-            out4 = self.embed(out4)
         return out
 
 def CIFAR_DenseNet121(pretrained=False, num_classes=10, bias=True, **kwargs):
