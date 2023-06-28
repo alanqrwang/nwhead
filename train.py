@@ -398,7 +398,7 @@ def nw_step(batch, network, criterion, optimizer, args, is_train=True, mode='ran
     optimizer.zero_grad()
     with torch.set_grad_enabled(is_train):
         if is_train:
-            output = network(img, label)[0]
+            output = network(img, label)
         else:
             output = network.predict(img, mode)
         loss = criterion(output, label)

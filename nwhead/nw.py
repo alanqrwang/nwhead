@@ -146,7 +146,7 @@ class NWNet(nn.Module):
                 plt.imshow(sgrid.permute(1, 2, 0).cpu().detach().numpy())
                 plt.show()
 
-        return self._forward(qfeat, sfeat, sy), isin
+        return self._forward(qfeat, sfeat, sy)#, isin
     
     def _forward(self, qfeat, sfeat, sy):
         '''Forward pass on features'''

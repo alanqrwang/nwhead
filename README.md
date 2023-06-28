@@ -72,7 +72,7 @@ for img, label in train_loader:
     label = label.to(device)
     optimizer.zero_grad()
     with torch.set_grad_enabled(True):
-        output = network(img, label)[0]
+        output = network(img, label)
         loss = criterion(output, label)
         loss.backward()
         optimizer.step()
@@ -91,7 +91,7 @@ for img, label in val_loader:
     label = label.to(device)
     optimizer.zero_grad()
     with torch.set_grad_enabled(False):
-        output = network.predict(img, mode)[0]
+        output = network.predict(img, mode)
         loss = criterion(output, label)
 ```
 
