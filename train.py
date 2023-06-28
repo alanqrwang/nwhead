@@ -58,7 +58,6 @@ class Parser(argparse.ArgumentParser):
     self.add_argument('--arch', type=str, default='resnet18')
     self.add_argument(
       '--train_method', default='nwhead')
-    self.add_bool_arg('use_nll_loss', True)
 
     # NW head parameters
     self.add_argument('--kernel_type', type=str, default='euclidean',
@@ -222,8 +221,7 @@ def main():
                         num_per_class=args.supp_num_per_class,
                         subsample_classes=args.subsample_classes,
                         embed_dim=args.embed_dim,
-                        debug_mode=args.debug_mode,
-                        use_nll_loss=args.use_nll_loss)
+                        debug_mode=args.debug_mode)
     else:
         raise NotImplementedError()
     summary(network)

@@ -90,18 +90,21 @@ class SupportSet:
 
     def get_infer_support(self, mode):
         '''Samples a support for inference depending on mode.'''
-        if mode == 'random':
-            sfeat, sy, _ = self.random_iter.next()
-        elif mode == 'full':
-            sfeat, sy = self.full_feat, self.full_y
-        elif mode == 'cluster':
-            sfeat, sy = self.cluster_feat, self.cluster_y
-        elif mode == 'ensemble':
-            sfeat, sy = self.full_feat_sep, self.full_y_sep
-        else:
-            raise NotImplementedError
+        try:
+            if mode == 'random':
+                sfeat, sy, _ = self.random_iter.next()
+            elif mode == 'full':
+                sfeat, sy = self.full_feat, self.full_y
+            elif mode == 'cluster':
+                sfeat, sy = self.cluster_feat, self.cluster_y
+            elif mode == 'ensemble':
+                sfeat, sy = self.full_feat_sep, self.full_y_sep
+            else:
+                raise NotImplementedError
 
-        return sfeat, sy
+            return sfeat, sy
+        except AttributeError:
+            print('Did you run precompute()?')
 
     def _combine_env_datasets(self, env_datasets):
         self.env_map = {i:i for i in range(len(env_datasets))}

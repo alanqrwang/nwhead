@@ -2,11 +2,15 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torchvision
-import matplotlib.pyplot as plt
 from .support import SupportSet
 from .kernel import get_kernel
 from .utils import linear_normalization
 from torch.nn.init import xavier_uniform_
+
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
 
 class NWNet(nn.Module):
     def __init__(self, 
@@ -23,7 +27,6 @@ class NWNet(nn.Module):
                  embed_dim=0, 
                  env_array=None, 
                  debug_mode=False,
-                 use_nll_loss=False,
                  device='cuda:0', 
                  ):
         '''
@@ -47,8 +50,6 @@ class NWNet(nn.Module):
         :param env_array: Array of same length as support dataset containing
             environment indicators
         :param debug_mode: If set, prints some debugging info and plots images
-        :param use_nll_loss: If set, returns log of probabilities as output, for use
-            with NLLLoss()
         :param device: Device used for computation
         '''
         super(NWNet, self).__init__()
@@ -56,7 +57,6 @@ class NWNet(nn.Module):
         self.train_type = train_type
         self.device = device
         self.debug_mode = debug_mode
-        self.use_nll_loss = use_nll_loss
         self.num_classes = num_classes
         assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
@@ -85,9 +85,13 @@ class NWNet(nn.Module):
         sinfo = self._compute_all_support_feats()
         self.sset.update_feats(*sinfo)
 
-    def predict(self, x, mode='random'):
+    def predict(self, x, mode='random', support_data=None):
         qfeat = self.featurizer(x)
-        sfeat, sy = self.sset.get_infer_support(mode)
+        if support_data is not None:
+            sx, sy, sm = support_data
+            sfeat = self.featurizer(sx)
+        else:
+            sfeat, sy = self.sset.get_infer_support(mode)
         if mode == 'ensemble':
             outputs = 0
             num_envs = len(sfeat)
@@ -95,22 +99,26 @@ class NWNet(nn.Module):
                 env_feat, env_y = env_feat.to(
                     x.device), env_y.to(x.device)
                 output = self._forward(qfeat, env_feat, env_y)
-                if self.use_nll_loss:
-                    outputs += output.exp()
-                else:
-                    outputs += output.log()
-            if self.use_nll_loss:
-                return torch.log(outputs / num_envs), torch.full((len(x),), True)
-            else:
-                return (outputs / num_envs).exp(), torch.full((len(x),), True)
+                outputs += output.exp()
+            return torch.log(outputs / num_envs)#, torch.full((len(x),), True)
         else:
             sfeat, sy = sfeat.to(x.device), sy.to(x.device)
-            return self._forward(qfeat, sfeat, sy), torch.full((len(x),), True)
+            return self._forward(qfeat, sfeat, sy)#, torch.full((len(x),), True)
 
-    def forward(self, x, y, metadata=None):
-        '''Forward pass using images for query and support.
-        Support set is some random subset of support dataset.'''
-        sx, sy, sm = self.sset.get_train_support(y, metadata)
+    def forward(self, x, y, metadata=None, support_data=None):
+        '''
+        Forward pass using images for query and support.
+        Support set is some random subset of support dataset.
+        
+        :param x: Input datapoints (bs, nch, l, w)
+        :param y: Corresponding labels (bs)
+        :param metadata: Corresponding metadata (bs)
+        :param support_data: (sx, sy, sm) tuple
+        '''
+        if support_data is not None:
+            sx, sy, sm = support_data
+        else:
+            sx, sy, sm = self.sset.get_train_support(y, metadata)
         sx, sy = sx.to(x.device), sy.to(x.device)
 
         batch_size = len(x)
@@ -120,20 +128,23 @@ class NWNet(nn.Module):
         
         isin = torch.isin(y, sy)
         if self.debug_mode:
-            qgrid = torchvision.utils.make_grid(linear_normalization(x), nrow=8)
-            sgrid = torchvision.utils.make_grid(linear_normalization(sx), nrow=8)
-            print('qbatch shape:', x.shape)
-            print('sbatch shape:', sx.shape)
-            plt.imshow(qgrid.permute(1, 2, 0).cpu().detach().numpy())
-            plt.show()
-            plt.imshow(sgrid.permute(1, 2, 0).cpu().detach().numpy())
-            plt.show()
+            print('qx shape:', x.shape)
+            print('sx shape:', sx.shape)
+            print('qfeat shape:', qfeat.shape)
+            print('sfeat shape:', sfeat.shape)
             print('qy:', y)
             print('sy:', sy)
+            print('qy in sy:', isin)
             if metadata is not None:
                 print('qmeta:', metadata)
                 print('smeta:', sm)
-            print('qy in sy:', isin)
+            if plt:
+                qgrid = torchvision.utils.make_grid(linear_normalization(x), nrow=8)
+                sgrid = torchvision.utils.make_grid(linear_normalization(sx), nrow=8)
+                plt.imshow(qgrid.permute(1, 2, 0).cpu().detach().numpy())
+                plt.show()
+                plt.imshow(sgrid.permute(1, 2, 0).cpu().detach().numpy())
+                plt.show()
 
         return self._forward(qfeat, sfeat, sy), isin
     
@@ -144,10 +155,7 @@ class NWNet(nn.Module):
         sfeat = sfeat[None].expand(batch_size, *sfeat.shape)
         sy = sy[None].expand(batch_size, *sy.shape)
         output = self.nwhead(qfeat, sfeat, sy)
-        if self.use_nll_loss:
-            return torch.log(output+1e-12)
-        else:
-            return output.exp()
+        return torch.log(output+1e-12)
 
     def _compute_all_support_feats(self, save=False):
         feats = []
@@ -162,7 +170,6 @@ class NWNet(nn.Module):
             env_meta = []
             for qimg, qlabel, qmeta in loader:
                 qimg = qimg.to(self.device)
-                print(qimg.shape)
                 feat = self.featurizer(qimg).cpu().detach()
                 feats.append(feat)
                 labels.append(qlabel.cpu().detach())
