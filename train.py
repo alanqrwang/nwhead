@@ -210,8 +210,7 @@ def main():
     if args.train_method == 'fchead':
         network = FCNet(feature_extractor, 
                         feat_dim, 
-                        num_classes,
-                        use_nll_loss=args.use_nll_loss)
+                        num_classes)
     elif args.train_method == 'nwhead':
         network = NWNet(feature_extractor, 
                         train_dataset,
@@ -228,10 +227,7 @@ def main():
     network.to(args.device)
 
     # Set loss, optimizer, and scheduler
-    if args.use_nll_loss:
-        criterion = torch.nn.NLLLoss()
-    else:
-        criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.NLLLoss()
     optimizer = torch.optim.SGD(network.parameters(), 
                                 lr=args.lr, 
                                 momentum=0.9, 
