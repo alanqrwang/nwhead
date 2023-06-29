@@ -160,10 +160,14 @@ def main():
     print('Transforms:\n', transform_train, transform_test)
 
     # Get dataloaders
-    if args.dataset in ['cifar10', 'cifar100']:
+    if args.dataset == 'cifar10':
         train_dataset = datasets.CIFAR10(args.data_dir, True, transform_train, download=True)
         val_dataset = datasets.CIFAR10(args.data_dir, False, transform_test, download=True)
         train_dataset.num_classes = 10
+    elif args.dataset == 'cifar100':
+        train_dataset = datasets.CIFAR100(args.data_dir, True, transform_train, download=True)
+        val_dataset = datasets.CIFAR100(args.data_dir, False, transform_test, download=True)
+        train_dataset.num_classes = 100
     elif args.dataset == 'bird':
         train_dataset = Cub200Dataset(args.data_dir, True, transform_train)
         val_dataset = Cub200Dataset(args.data_dir, False, transform_test)
