@@ -76,7 +76,6 @@ for img, label in train_loader:
         loss = criterion(output, label)
         loss.backward()
         optimizer.step()
-
 ```
 To perform evaluation, use the `predict()` method and pass in your desired inference mode.
 Make sure to call `precompute()` beforehand.
