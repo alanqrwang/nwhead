@@ -105,15 +105,18 @@ class InfiniteUniformClassLoader(DataLoader):
     def __init__(self,
                  dataset,
                  num_per_class,
-                 subsample_classes=None
+                 subsample_classes=None,
+                 held_out_class=None,
                  ):
         self.dataset = dataset
         y_array = dataset.targets
         self.indices = get_separated_indices(y_array)
+        if held_out_class:
+            del self.indices[held_out_class]
         self.num_classes = len(self.indices)
         self.subsample_classes = subsample_classes
         if subsample_classes:
-            assert subsample_classes < len(self.indices)
+            assert subsample_classes <= len(self.indices)
 
         self.num_per_class = num_per_class
         super(InfiniteUniformClassLoader, self).__init__(dataset)

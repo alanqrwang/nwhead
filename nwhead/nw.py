@@ -15,8 +15,8 @@ except ImportError:
 class NWNet(nn.Module):
     def __init__(self, 
                  featurizer, 
-                 support_dataset, 
                  num_classes,
+                 support_dataset=None, 
                  feat_dim=None,
                  kernel_type='euclidean', 
                  train_type='random', 
@@ -28,6 +28,7 @@ class NWNet(nn.Module):
                  env_array=None, 
                  debug_mode=False,
                  device='cuda:0', 
+                 held_out_class=None
                  ):
         '''
         Top level NW net class. Creates kernel, NWHead, and SupportSet as modules.
@@ -58,7 +59,8 @@ class NWNet(nn.Module):
         self.device = device
         self.debug_mode = debug_mode
         self.num_classes = num_classes
-        assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
+        if support_dataset is not None:
+            assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
         # Kernel
         kernel = get_kernel(kernel_type)
@@ -69,14 +71,16 @@ class NWNet(nn.Module):
                              proj_dim=proj_dim)
 
         # Support dataset
-        self.sset = SupportSet(support_dataset,
+        if support_dataset is not None:
+            self.sset = SupportSet(support_dataset,
                                train_type,
                                num_per_class,
                                total_per_class,
                                self.num_classes,
                                num_clusters=num_clusters,
                                subsample_classes=subsample_classes,
-                               env_array=env_array)
+                               env_array=env_array,
+                               held_out_class=held_out_class)
 
     def precompute(self):
         '''Precomputes all support features, cluster centroids, and 
@@ -86,12 +90,25 @@ class NWNet(nn.Module):
         self.sset.update_feats(*sinfo)
 
     def predict(self, x, mode='random', support_data=None):
+        '''
+        Perform prediction given test images.
+        
+        :param x: Input datapoints (bs, nch, l, w)
+        :param mode: Inference mode. One of ['random', 'full', 'cluster', 'ensemble']
+        :param support_data: Optional (sx, sy, sm) tuple
+        '''
         qfeat = self.featurizer(x)
         if support_data is not None:
             sx, sy, sm = support_data
             sfeat = self.featurizer(sx)
         else:
             sfeat, sy = self.sset.get_infer_support(mode)
+
+        if self.debug_mode:
+            print('qx shape:', x.shape)
+            print('sfeat shape:', sfeat.shape)
+            print('sy:', torch.unique(sy))
+
         if mode == 'ensemble':
             outputs = 0
             num_envs = len(sfeat)
@@ -113,7 +130,7 @@ class NWNet(nn.Module):
         :param x: Input datapoints (bs, nch, l, w)
         :param y: Corresponding labels (bs)
         :param metadata: Corresponding metadata (bs)
-        :param support_data: (sx, sy, sm) tuple
+        :param support_data: Optional (sx, sy, sm) tuple
         '''
         if support_data is not None:
             sx, sy, sm = support_data
