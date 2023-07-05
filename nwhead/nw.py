@@ -211,29 +211,21 @@ class NWHead(nn.Module):
                  kernel, 
                  feat_dim=None,
                  proj_dim=0, 
-                 add_bias=True,
                  device='cuda:0', 
                  dtype=torch.float32):
         super(NWHead, self).__init__()
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
         self.proj_dim = proj_dim
-        self.add_bias = add_bias
 
         if self.proj_dim > 0:
             assert feat_dim is not None, 'Feature dimension must be specified'
             self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, proj_dim), **factory_kwargs))
             xavier_uniform_(self.proj_weight)
-            if self.add_bias:
-                self.proj_bias = nn.Parameter(torch.randn((1, 1, proj_dim), **factory_kwargs))
-                xavier_uniform_(self.proj_bias)
         
     def project(self, x):
         bs = len(x)
-        proj = torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
-        if self.add_bias:
-            proj = proj + self.proj_bias
-        return proj
+        return torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
 
     def forward(self, x, support_x, support_y):
         """
