@@ -15,26 +15,34 @@ class EuclideanDistance(nn.Module):
     def forward(self, x, y):
         return -torch.cdist(x, y)
 
+class HypersphereEuclideanDistance(nn.Module):
+    def forward(self, x, y):
+        x = F.normalize(x, dim=-1)
+        y = F.normalize(y, dim=-1)
+        return -torch.cdist(x, y)
+
 class CosineDistance(nn.Module):
     def forward(self, x, y):
-        x = x / x.norm(dim=-1, keepdim=True)
-        y = y / y.norm(dim=-1, keepdim=True)
+        x = F.normalize(x, dim=-1)
+        y = F.normalize(y, dim=-1)
         # (B, num_queries, embed_dim) x (B, embed_dim, num_keys) -> (B, num_queries, num_keys)
         return torch.bmm(x, y.transpose(-2, -1))
 
 class DotProduct(nn.Module):
     def forward(self, x, y):
-        x = x / math.sqrt(x.shape[-1])
+        x = F.normalize(x, dim=-1)
+        y = F.normalize(y, dim=-1)
         # (B, num_queries, embed_dim) x (B, embed_dim, num_keys) -> (B, num_queries, num_keys)
         return torch.bmm(x, y.transpose(-2, -1))
 
 class Clip(nn.Module):
     def __init__(self):
+        super(Clip, self).__init__()
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
     
     def forward(self, x, y):
-        x = x / x.norm(dim=-1, keepdim=True)
-        y = y / y.norm(dim=-1, keepdim=True)
+        x = F.normalize(x, dim=-1)
+        y = F.normalize(y, dim=-1)
         logit_scale = self.logit_scale.exp()
         return logit_scale * torch.bmm(x, y.transpose(-2, -1))
 
@@ -75,6 +83,8 @@ class RelationNetwork(nn.Module):
 def get_kernel(kernel_type):
     if kernel_type == 'euclidean':
         kernel = EuclideanDistance()
+    elif kernel_type == 'hypersphere_euclidean':
+        kernel = HypersphereEuclideanDistance()
     elif kernel_type == 'cosine':
         kernel = CosineDistance()
     elif kernel_type == 'dotproduct':
