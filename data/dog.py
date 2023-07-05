@@ -20,7 +20,8 @@ class StanfordDogDataset(torch.utils.data.Dataset):
           file_names = os.path.join(self.root_path, 'test_list.csv')
       df = pd.read_csv(file_names, sep=',', header=None, names=['path', 'label'])
 
-      return [os.path.join(self.root_path, 'Images', path) for path in df.path.to_numpy()], df.label.to_numpy()-1
+      self.paths = [os.path.join(self.root_path, 'Images', path) for path in df.path.to_numpy()]
+      self.targets = df.label.to_numpy()-1
 
   def __len__(self):
       return len(self.paths)

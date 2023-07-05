@@ -180,8 +180,8 @@ def main():
         train_dataset.num_classes = 102
         train_dataset.targets = train_dataset._labels
     elif args.dataset == 'aircraft':
-        train_dataset = datasets.FGVCAircraft(args.data_dir, 'trainval', transform_train, download=True)
-        val_dataset = datasets.FGVCAircraft(args.data_dir, 'test', transform_test, download=True)
+        train_dataset = datasets.FGVCAircraft(args.data_dir, 'trainval', transform=transform_train, download=True)
+        val_dataset = datasets.FGVCAircraft(args.data_dir, 'test', transform=transform_test, download=True)
         train_dataset.num_classes = 100
         train_dataset.targets = train_dataset._labels
     else:
