@@ -21,98 +21,104 @@ from nwhead.nw import NWNet
 from fchead.fc import FCNet
 
 class Parser(argparse.ArgumentParser):
-  def __init__(self):
-    super(Parser, self).__init__(description='NW Head Training')
-    # I/O parameters
-    self.add_argument('--models_dir', default='./',
-              type=str, help='directory to save models')
-    self.add_argument('--data_dir', default='./',
-              type=str, help='directory where data lives')
-    self.add_argument('--log_interval', type=int,
-              default=25, help='Frequency of logs')
-    self.add_argument('--workers', type=int, default=0,
-              help='Num workers')
-    self.add_argument('--gpu_id', type=int, default=0,
-              help='gpu id to train on')
-    self.add_bool_arg('debug_mode', False)
+    def __init__(self):
+        super(Parser, self).__init__(description='NW Head Training')
+        # I/O parameters
+        self.add_argument('--models_dir', default='./',
+                  type=str, help='directory to save models')
+        self.add_argument('--data_dir', default='./',
+                  type=str, help='directory where data lives')
+        self.add_argument('--log_interval', type=int,
+                  default=25, help='Frequency of logs')
+        self.add_argument('--workers', type=int, default=0,
+                  help='Num workers')
+        self.add_argument('--gpu_id', type=int, default=0,
+                  help='gpu id to train on')
+        self.add_bool_arg('debug_mode', False)
 
-    # Machine learning parameters
-    self.add_argument('--dataset', type=str, required=True)
-    self.add_argument('--lr', type=float, default=1e-3,
-              help='Learning rate')
-    self.add_argument('--batch_size', type=int,
-              default=1, help='Batch size')
-    self.add_argument('--num_steps_per_epoch', type=int,
-              default=10000000, help='Num steps per epoch')
-    self.add_argument('--num_val_steps_per_epoch', type=int,
-              default=10000000, help='Num validation steps per epoch')
-    self.add_argument('--num_epochs', type=int, default=200,
-              help='Total training epochs')
-    self.add_argument('--scheduler_milestones', nargs='+', type=int,
-              default=(100, 150), help='Step size for scheduler')
-    self.add_argument('--scheduler_gamma', type=float,
-              default=0.1, help='Multiplicative factor for scheduler')
-    self.add_argument('--seed', type=int,
-              default=0, help='Seed')
-    self.add_argument('--weight_decay', type=float,
-              default=1e-4, help='Weight decay')
-    self.add_argument('--arch', type=str, default='resnet18')
-    self.add_argument(
-      '--train_method', default='nwhead')
-    self.add_bool_arg('freeze_featurizer', False)
+        # Machine learning parameters
+        self.add_argument('--dataset', type=str, required=True)
+        self.add_argument('--lr', type=float, default=1e-3,
+                  help='Learning rate')
+        self.add_argument('--batch_size', type=int,
+                  default=1, help='Batch size')
+        self.add_argument('--num_steps_per_epoch', type=int,
+                  default=10000000, help='Num steps per epoch')
+        self.add_argument('--num_val_steps_per_epoch', type=int,
+                  default=10000000, help='Num validation steps per epoch')
+        self.add_argument('--num_epochs', type=int, default=200,
+                  help='Total training epochs')
+        self.add_argument('--scheduler_milestones', nargs='+', type=int,
+                  default=(100, 150), help='Step size for scheduler')
+        self.add_argument('--scheduler_gamma', type=float,
+                  default=0.1, help='Multiplicative factor for scheduler')
+        self.add_argument('--seed', type=int,
+                  default=0, help='Seed')
+        self.add_argument('--weight_decay', type=float,
+                  default=1e-4, help='Weight decay')
+        self.add_argument('--arch', type=str, default='resnet18')
+        self.add_argument(
+          '--train_method', default='nwhead')
+        self.add_bool_arg('freeze_featurizer', False)
 
-    # NW head parameters
-    self.add_argument('--kernel_type', type=str, default='euclidean',
-              help='Kernel type')
-    self.add_argument('--proj_dim', type=int,
-              default=0)
-    self.add_argument('--supp_num_per_class', type=int,
-              default=1)
-    self.add_argument('--subsample_classes', type=int,
-              default=None, help='size of subsample sampler')
+        # NW head parameters
+        self.add_argument('--kernel_type', type=str, default='euclidean',
+                  help='Kernel type')
+        self.add_argument('--proj_dim', type=int,
+                  default=0)
+        self.add_argument('--supp_num_per_class', type=int,
+                  default=1)
+        self.add_argument('--subsample_classes', type=int,
+                  default=None, help='size of subsample sampler')
+        self.add_bool_arg('use_nis_embedding', False)
+        self.add_bool_arg('random_dropout', False)
+        self.add_bool_arg('do_held_out_training', False)
 
-    # Weights & Biases
-    self.add_bool_arg('use_wandb', False)
-    self.add_argument('--wandb_api_key_path', type=str,
-                        help="Path to Weights & Biases API Key. If use_wandb is set to True and this argument is not specified, user will be prompted to authenticate.")
-    self.add_argument('--wandb_kwargs', nargs='*', action=ParseKwargs, default={},
-                        help='keyword arguments for wandb.init() passed as key1=value1 key2=value2')
+        # Weights & Biases
+        self.add_bool_arg('use_wandb', False)
+        self.add_argument('--wandb_api_key_path', type=str,
+                            help="Path to Weights & Biases API Key. If use_wandb is set to True and this argument is not specified, user will be prompted to authenticate.")
+        self.add_argument('--wandb_kwargs', nargs='*', action=ParseKwargs, default={},
+                            help='keyword arguments for wandb.init() passed as key1=value1 key2=value2')
 
-  def add_bool_arg(self, name, default=True):
-    """Add boolean argument to argparse parser"""
-    group = self.add_mutually_exclusive_group(required=False)
-    group.add_argument('--' + name, dest=name, action='store_true')
-    group.add_argument('--no_' + name, dest=name, action='store_false')
-    self.set_defaults(**{name: default})
+    def add_bool_arg(self, name, default=True):
+        """Add boolean argument to argparse parser"""
+        group = self.add_mutually_exclusive_group(required=False)
+        group.add_argument('--' + name, dest=name, action='store_true')
+        group.add_argument('--no_' + name, dest=name, action='store_false')
+        self.set_defaults(**{name: default})
 
-  def parse(self):
-    args = self.parse_args()
-    args.run_dir = os.path.join(args.models_dir,
-                  'method{method}_dataset{dataset}_arch{arch}_lr{lr}_bs{batch_size}_projdim{proj_dim}_numsupp{numsupp}_subsample{subsample}_wd{wd}_seed{seed}'.format(
-                    method=args.train_method,
-                    dataset=args.dataset,
-                    arch=args.arch,
-                    lr=args.lr,
-                    batch_size=args.batch_size,
-                    proj_dim=args.proj_dim,
-                    numsupp=args.supp_num_per_class,
-                    subsample=args.subsample_classes,
-                    wd=args.weight_decay,
-                    seed=args.seed
-                  ))
-    args.ckpt_dir = os.path.join(args.run_dir, 'checkpoints')
-    if not os.path.exists(args.run_dir):
-      os.makedirs(args.run_dir)
-    if not os.path.exists(args.ckpt_dir):
-      os.makedirs(args.ckpt_dir)
+    def parse(self):
+        args = self.parse_args()
+        args.run_dir = os.path.join(args.models_dir,
+                      'method{method}_dataset{dataset}_arch{arch}_lr{lr}_bs{batch_size}_projdim{proj_dim}_numsupp{numsupp}_subsample{subsample}_wd{wd}_seed{seed}'.format(
+                        method=args.train_method,
+                        dataset=args.dataset,
+                        arch=args.arch,
+                        lr=args.lr,
+                        batch_size=args.batch_size,
+                        proj_dim=args.proj_dim,
+                        numsupp=args.supp_num_per_class,
+                        subsample=args.subsample_classes,
+                        wd=args.weight_decay,
+                        seed=args.seed
+                      ))
+        args.ckpt_dir = os.path.join(args.run_dir, 'checkpoints')
+        if not os.path.exists(args.run_dir):
+            os.makedirs(args.run_dir)
+        if not os.path.exists(args.ckpt_dir):
+            os.makedirs(args.ckpt_dir)
 
-    # Print args and save to file
-    print('Arguments:')
-    pprint(vars(args))
-    with open(args.run_dir + "/args.txt", 'w') as args_file:
-      json.dump(vars(args), args_file, indent=4)
-    return args
-
+        # Print args and save to file
+        print('Arguments:')
+        pprint(vars(args))
+        with open(args.run_dir + "/args.txt", 'w') as args_file:
+            json.dump(vars(args), args_file, indent=4)
+        
+        if args.debug_mode:
+            args.num_steps_per_epoch = 5
+            args.num_val_steps_per_epoch = 5
+        return args
 
 def main():
     # Parse arguments
@@ -190,11 +196,14 @@ def main():
     else:
       raise NotImplementedError()
 
-    args.held_out_class = train_dataset.num_classes - 1
-    train_loader, val_loader, heldout_train_loader, heldout_val_loader = \
-        get_fewshot_loaders(train_dataset, val_dataset, args)
+    held_out_class = train_dataset.num_classes - 1
+    train_loader, val_loader, heldout_val_loader = \
+        get_fewshot_loaders(train_dataset, val_dataset, 
+                            args.do_held_out_training,
+                            held_out_class,
+                            batch_size=args.batch_size,
+                            workers=args.workers)
     num_classes = train_dataset.num_classes
-
     support_dataset = train_loader.dataset
 
     # Get network
@@ -240,7 +249,10 @@ def main():
                         subsample_classes=args.subsample_classes,
                         proj_dim=args.proj_dim,
                         debug_mode=args.debug_mode,
-                        held_out_class=args.held_out_class)
+                        do_held_out_training=args.do_held_out_training,
+                        held_out_class=held_out_class,
+                        use_nis_embedding=args.use_nis_embedding,
+                        random_dropout=args.random_dropout)
     else:
         raise NotImplementedError()
     summary(network)
@@ -299,7 +311,7 @@ def main():
     args.val_metrics = {}
     args.val_metrics.update({key: Metric() for key in list_of_val_metrics})
 
-    if args.use_wandb:
+    if args.use_wandb and not args.debug_mode:
         initialize_wandb(args)
 
     # Training loop
@@ -349,7 +361,7 @@ def main():
                 args.val_metrics['loss:val:cluster'].result(), args.val_metrics['acc:val:cluster'].result()))
             print()
 
-        if args.use_wandb:
+        if args.use_wandb and not args.debug_mode:
             wandb.log({k: v.result() for k, v in args.metrics.items()})
             wandb.log({k: v.result() for k, v in args.val_metrics.items()})
 

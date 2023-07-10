@@ -1,27 +1,37 @@
 import numpy as np
 import torch
 
-def get_fewshot_loaders(train_dataset, val_dataset, args):
-    train_sampler = HeldOutSampler(train_dataset, shuffle=True, heldout=False, held_out_class=args.held_out_class)
-    heldout_train_sampler = HeldOutSampler(train_dataset, shuffle=True, heldout=True, held_out_class=args.held_out_class)
-    val_sampler = HeldOutSampler(val_dataset, shuffle=False, heldout=False, held_out_class=args.held_out_class)
-    heldout_val_sampler = HeldOutSampler(val_dataset, shuffle=False, heldout=True, held_out_class=args.held_out_class)
+def get_fewshot_loaders(train_dataset, val_dataset, 
+                        do_held_out_training, 
+                        held_out_class, 
+                        batch_size,
+                        workers):
+    # If held_out_class is specified, then we need to use a custom sampler for training
+    if do_held_out_training:
+        train_sampler = HeldOutSampler(train_dataset, shuffle=True, heldout=False, held_out_class=held_out_class)
+        train_loader = torch.utils.data.DataLoader(
+          train_dataset, batch_size=batch_size,
+          num_workers=workers, pin_memory=True, sampler=train_sampler)
+        # heldout_train_sampler = HeldOutSampler(train_dataset, shuffle=True, heldout=True, held_out_class=args.held_out_class)
+        # heldout_train_loader = torch.utils.data.DataLoader(
+        #   train_dataset, batch_size=args.batch_size,
+        #   num_workers=args.workers, pin_memory=True, sampler=heldout_train_sampler)
+    else:
+        train_loader = torch.utils.data.DataLoader(
+          train_dataset, batch_size=batch_size, shuffle=True,
+          num_workers=workers, pin_memory=True)
 
-    train_loader = torch.utils.data.DataLoader(
-      train_dataset, batch_size=args.batch_size,
-      num_workers=args.workers, pin_memory=True, sampler=train_sampler)
-    heldout_train_loader = torch.utils.data.DataLoader(
-      train_dataset, batch_size=args.batch_size,
-      num_workers=args.workers, pin_memory=True, sampler=heldout_train_sampler)
-
+    # For validation, always use custom sampler
+    val_sampler = HeldOutSampler(val_dataset, shuffle=False, heldout=False, held_out_class=held_out_class)
     val_loader = torch.utils.data.DataLoader(
-      val_dataset, batch_size=args.batch_size,
-      num_workers=args.workers, pin_memory=True, sampler=val_sampler)
+      val_dataset, batch_size=batch_size,
+      num_workers=workers, pin_memory=True, sampler=val_sampler)
+    heldout_val_sampler = HeldOutSampler(val_dataset, shuffle=False, heldout=True, held_out_class=held_out_class)
     heldout_val_loader = torch.utils.data.DataLoader(
-      val_dataset, batch_size=args.batch_size,
-      num_workers=args.workers, pin_memory=True, sampler=heldout_val_sampler)
+      val_dataset, batch_size=batch_size,
+      num_workers=workers, pin_memory=True, sampler=heldout_val_sampler)
     
-    return train_loader, val_loader, heldout_train_loader, heldout_val_loader
+    return train_loader, val_loader, heldout_val_loader
 
 def get_separated_indices(vals):
     '''

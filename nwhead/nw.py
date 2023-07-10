@@ -28,8 +28,11 @@ class NWNet(nn.Module):
                  env_array=None, 
                  debug_mode=False,
                  device='cuda:0', 
-                 held_out_class=None
-                 ):
+                 do_held_out_training=False,
+                 held_out_class=None,
+                 random_dropout=False,
+                 use_nis_embedding=False,
+                 dtype=torch.float32):
         '''
         Top level NW net class. Creates kernel, NWHead, and SupportSet as modules.
 
@@ -59,6 +62,8 @@ class NWNet(nn.Module):
         self.device = device
         self.debug_mode = debug_mode
         self.num_classes = num_classes
+        self.use_nis_embedding = use_nis_embedding
+        self.num_per_class = num_per_class
         if support_dataset is not None:
             assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
@@ -80,7 +85,17 @@ class NWNet(nn.Module):
                                num_clusters=num_clusters,
                                subsample_classes=subsample_classes,
                                env_array=env_array,
-                               held_out_class=held_out_class)
+                               do_held_out_training=do_held_out_training,
+                               held_out_class=held_out_class,
+                               random_dropout=random_dropout)
+
+        # NIS embedding
+        if self.use_nis_embedding:
+            factory_kwargs = {'device': device, 'dtype': dtype}
+            assert feat_dim is not None, 'Feature dimension must be specified'
+            self.nis_embedding = nn.Parameter(torch.empty((1, feat_dim), **factory_kwargs))
+            xavier_uniform_(self.nis_embedding)
+            self.nis_class = self.num_classes
 
     def precompute(self):
         '''Precomputes all support features, cluster centroids, and 
@@ -95,7 +110,7 @@ class NWNet(nn.Module):
         
         :param x: Input datapoints (bs, nch, l, w)
         :param mode: Inference mode. One of ['random', 'full', 'cluster', 'ensemble']
-        :param support_data: Optional (sx, sy, sm) tuple
+        :param support_data: Optional (sx, sy, sm) tuple for functional implementation
         '''
         qfeat = self.featurizer(x)
         if support_data is not None:
@@ -104,10 +119,16 @@ class NWNet(nn.Module):
         else:
             sfeat, sy = self.sset.get_infer_support(mode)
 
-        if self.debug_mode:
-            print('qx shape:', x.shape)
-            print('sfeat shape:', sfeat.shape)
-            print('sy:', torch.unique(sy))
+        if self.use_nis_embedding:
+            nis_embedding = self.nis_embedding.expand(self.num_per_class, sfeat.shape[-1]).to(sfeat.device)
+            sfeat = torch.cat((sfeat, nis_embedding), dim=0)
+            nis_class = torch.full((self.num_per_class,), self.nis_class).to(sy.device)
+            sy = torch.cat((sy, nis_class))
+
+        # if self.debug_mode:
+        #     print('qx shape:', x.shape)
+        #     print('sfeat shape:', sfeat.shape)
+        #     print('sy:', torch.unique(sy))
 
         if mode == 'ensemble':
             outputs = 0
@@ -130,7 +151,7 @@ class NWNet(nn.Module):
         :param x: Input datapoints (bs, nch, l, w)
         :param y: Corresponding labels (bs)
         :param metadata: Corresponding metadata (bs)
-        :param support_data: Optional (sx, sy, sm) tuple
+        :param support_data: Optional (sx, sy, sm) tuple for functional implementation
         '''
         if support_data is not None:
             sx, sy, sm = support_data
@@ -144,6 +165,16 @@ class NWNet(nn.Module):
         qfeat, sfeat = feats[:batch_size], feats[batch_size:]
         
         isin = torch.isin(y, sy)
+
+        if self.use_nis_embedding:
+            # Append NIS embedding and label to support set
+            nis_embedding = self.nis_embedding.expand(self.num_per_class, sfeat.shape[-1])
+            sfeat = torch.cat((sfeat, nis_embedding), dim=0)
+            nis_class = torch.full((self.num_per_class,), self.nis_class).to(sy.device)
+            sy = torch.cat((sy, nis_class))
+            # Set query label as NIS class if not in support set
+            y[~isin] = self.nis_class 
+
         if self.debug_mode:
             print('qx shape:', x.shape)
             print('sx shape:', sx.shape)
@@ -168,7 +199,10 @@ class NWNet(nn.Module):
     def _forward(self, qfeat, sfeat, sy):
         '''Forward pass on features'''
         batch_size = len(qfeat)
-        sy = F.one_hot(sy, self.num_classes).float()
+        if self.use_nis_embedding:
+            sy = F.one_hot(sy, self.num_classes+1).float()
+        else:
+            sy = F.one_hot(sy, self.num_classes).float()
         sfeat = sfeat[None].expand(batch_size, *sfeat.shape)
         sy = sy[None].expand(batch_size, *sy.shape)
         output = self.nwhead(qfeat, sfeat, sy)

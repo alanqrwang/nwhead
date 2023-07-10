@@ -106,17 +106,20 @@ class InfiniteUniformClassLoader(DataLoader):
                  dataset,
                  num_per_class,
                  subsample_classes=None,
+                 do_held_out_training=False,
                  held_out_class=None,
+                 random_dropout=False
                  ):
         self.dataset = dataset
         y_array = dataset.targets
         self.indices = get_separated_indices(y_array)
-        if held_out_class:
+        if do_held_out_training:
             del self.indices[held_out_class]
         self.num_classes = len(self.indices)
         self.subsample_classes = subsample_classes
         if subsample_classes:
             assert subsample_classes <= len(self.indices)
+        self.random_dropout = random_dropout
 
         self.num_per_class = num_per_class
         super(InfiniteUniformClassLoader, self).__init__(dataset)
@@ -135,6 +138,9 @@ class InfiniteUniformClassLoader(DataLoader):
             probs /= probs.sum()
             subclasses = np.random.choice(self.num_classes, size=self.subsample_classes, replace=False, p=probs)
 
+            if self.random_dropout:
+                drop_idx = np.random.choice(len(qy))
+                qy = np.delete(qy, drop_idx)
             subclasses = np.concatenate([subclasses, qy])
             indices = [self.indices[i] for i in subclasses] 
         else:
