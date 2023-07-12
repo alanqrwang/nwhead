@@ -2,10 +2,12 @@ import numpy as np
 import torch
 
 def get_fewshot_loaders(train_dataset, val_dataset, 
+                        val_dataset_nis,
                         do_held_out_training, 
                         held_out_class, 
                         batch_size,
-                        workers):
+                        workers,
+                        num_classes):
     # If held_out_class is specified, then we need to use a custom sampler for training
     if do_held_out_training:
         train_sampler = HeldOutSampler(train_dataset, shuffle=True, heldout=False, held_out_class=held_out_class)
@@ -30,8 +32,15 @@ def get_fewshot_loaders(train_dataset, val_dataset,
     heldout_val_loader = torch.utils.data.DataLoader(
       val_dataset, batch_size=batch_size,
       num_workers=workers, pin_memory=True, sampler=heldout_val_sampler)
+
+    # Set all targets of heldout validation set to num_classes (i.e. nis class)
+    heldout_val_sampler_nis = HeldOutSampler(val_dataset_nis, shuffle=False, heldout=True, held_out_class=held_out_class)
+    val_dataset_nis.targets = (np.ones(len(val_dataset_nis)) * num_classes).astype('int')
+    heldout_val_loader_nis = torch.utils.data.DataLoader(
+      val_dataset_nis, batch_size=batch_size,
+      num_workers=workers, pin_memory=True, sampler=heldout_val_sampler_nis)
     
-    return train_loader, val_loader, heldout_val_loader
+    return train_loader, val_loader, heldout_val_loader, heldout_val_loader_nis
 
 def get_separated_indices(vals):
     '''

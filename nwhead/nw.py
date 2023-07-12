@@ -30,8 +30,9 @@ class NWNet(nn.Module):
                  device='cuda:0', 
                  do_held_out_training=False,
                  held_out_class=None,
-                 random_dropout=False,
+                 class_dropout=0,
                  use_nis_embedding=False,
+                 cl2n=False,
                  dtype=torch.float32):
         '''
         Top level NW net class. Creates kernel, NWHead, and SupportSet as modules.
@@ -73,7 +74,9 @@ class NWNet(nn.Module):
         # NW Head
         self.nwhead = NWHead(kernel=kernel,
                              feat_dim=feat_dim,
-                             proj_dim=proj_dim)
+                             proj_dim=proj_dim,
+                             cl2n=cl2n,
+                             device=device)
 
         # Support dataset
         if support_dataset is not None:
@@ -87,7 +90,7 @@ class NWNet(nn.Module):
                                env_array=env_array,
                                do_held_out_training=do_held_out_training,
                                held_out_class=held_out_class,
-                               random_dropout=random_dropout)
+                               class_dropout=class_dropout)
 
         # NIS embedding
         if self.use_nis_embedding:
@@ -125,10 +128,10 @@ class NWNet(nn.Module):
             nis_class = torch.full((self.num_per_class,), self.nis_class).to(sy.device)
             sy = torch.cat((sy, nis_class))
 
-        # if self.debug_mode:
-        #     print('qx shape:', x.shape)
-        #     print('sfeat shape:', sfeat.shape)
-        #     print('sy:', torch.unique(sy))
+        if self.debug_mode:
+            print('qx shape:', x.shape)
+            print('sfeat shape:', sfeat.shape)
+            print('sy:', sy)
 
         if mode == 'ensemble':
             outputs = 0
@@ -166,15 +169,6 @@ class NWNet(nn.Module):
         
         isin = torch.isin(y, sy)
 
-        if self.use_nis_embedding:
-            # Append NIS embedding and label to support set
-            nis_embedding = self.nis_embedding.expand(self.num_per_class, sfeat.shape[-1])
-            sfeat = torch.cat((sfeat, nis_embedding), dim=0)
-            nis_class = torch.full((self.num_per_class,), self.nis_class).to(sy.device)
-            sy = torch.cat((sy, nis_class))
-            # Set query label as NIS class if not in support set
-            y[~isin] = self.nis_class 
-
         if self.debug_mode:
             print('qx shape:', x.shape)
             print('sx shape:', sx.shape)
@@ -193,6 +187,19 @@ class NWNet(nn.Module):
                 plt.show()
                 plt.imshow(sgrid.permute(1, 2, 0).cpu().detach().numpy())
                 plt.show()
+
+        if self.use_nis_embedding:
+            # Append NIS embedding and label to support set
+            nis_embedding = self.nis_embedding.expand(self.num_per_class, sfeat.shape[-1])
+            sfeat = torch.cat((sfeat, nis_embedding), dim=0)
+            nis_class = torch.full((self.num_per_class,), self.nis_class).to(sy.device)
+            sy = torch.cat((sy, nis_class))
+            # Set query label as NIS class if not in support set
+            y[~isin] = self.nis_class 
+
+            if self.debug_mode:
+                print('qy after nis:', y)
+                print('sy after nis:', sy)
 
         return self._forward(qfeat, sfeat, sy)#, isin
     
@@ -245,17 +252,24 @@ class NWHead(nn.Module):
                  kernel, 
                  feat_dim=None,
                  proj_dim=0, 
+                 cl2n=False,
+                 momentum=1.0,
                  device='cuda:0', 
                  dtype=torch.float32):
         super(NWHead, self).__init__()
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
         self.proj_dim = proj_dim
+        self.cl2n = cl2n
+        self.momentum = momentum
 
         if self.proj_dim > 0:
             assert feat_dim is not None, 'Feature dimension must be specified'
             self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, proj_dim), **factory_kwargs))
             xavier_uniform_(self.proj_weight)
+            self.moving_mean = torch.zeros((1, proj_dim), **factory_kwargs)
+        else:
+            self.moving_mean = torch.zeros((1, feat_dim), **factory_kwargs)
         
     def project(self, x):
         bs = len(x)
@@ -273,6 +287,19 @@ class NWHead(nn.Module):
         if self.proj_dim > 0:
             x = self.project(x)
             support_x = self.project(support_x)
+
+        if self.cl2n:
+            if self.training:
+                feat_mean = torch.cat([x.reshape(-1, x.shape[-1]), support_x.reshape(-1, x.shape[-1])], dim=0).mean(dim=0).detach()
+
+                # Update the mean using moving average
+                self.moving_mean = (1.0 - self.momentum) * self.moving_mean + self.momentum * feat_mean
+            else:
+                feat_mean = self.moving_mean.to(x.device).detach()
+            x = x - feat_mean
+            support_x = support_x - feat_mean
+            x = F.normalize(x, dim=-1)
+            support_x = F.normalize(support_x, dim=-1)
 
         scores = self.kernel(x, support_x)
 

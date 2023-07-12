@@ -1,4 +1,5 @@
 import os
+import copy
 import random
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ import wandb
 from data.fewshot_loaders import get_fewshot_loaders
 from data.bird import Cub200Dataset
 from data.dog import StanfordDogDataset
-from util.metric import Metric, ECELoss
+from util.metric import Metric, ECELoss, SmoothNLLLoss
 from util.utils import parse_bool, ParseKwargs, summary, save_checkpoint, initialize_wandb
 from util import metric
 from model import load_model
@@ -60,6 +61,8 @@ class Parser(argparse.ArgumentParser):
         self.add_argument(
           '--train_method', default='nwhead')
         self.add_bool_arg('freeze_featurizer', False)
+        self.add_argument('--label_smoothing', type=float,
+                  default=0, help='Label smoothing')
 
         # NW head parameters
         self.add_argument('--kernel_type', type=str, default='euclidean',
@@ -70,9 +73,10 @@ class Parser(argparse.ArgumentParser):
                   default=1)
         self.add_argument('--subsample_classes', type=int,
                   default=None, help='size of subsample sampler')
-        self.add_bool_arg('use_nis_embedding', False)
-        self.add_bool_arg('random_dropout', False)
+        self.add_argument('--class_dropout', type=float,
+                  default=0, help='p value for randomly class dropout in support')
         self.add_bool_arg('do_held_out_training', False)
+        self.add_bool_arg('cl2n', False)
 
         # Weights & Biases
         self.add_bool_arg('use_wandb', False)
@@ -197,13 +201,15 @@ def main():
       raise NotImplementedError()
 
     held_out_class = train_dataset.num_classes - 1
-    train_loader, val_loader, heldout_val_loader = \
+    num_classes = train_dataset.num_classes
+    train_loader, val_loader, heldout_val_loader, heldout_val_loader_nis = \
         get_fewshot_loaders(train_dataset, val_dataset, 
+                            copy.deepcopy(val_dataset),
                             args.do_held_out_training,
                             held_out_class,
                             batch_size=args.batch_size,
-                            workers=args.workers)
-    num_classes = train_dataset.num_classes
+                            workers=args.workers,
+                            num_classes=num_classes)
     support_dataset = train_loader.dataset
 
     # Get network
@@ -251,15 +257,20 @@ def main():
                         debug_mode=args.debug_mode,
                         do_held_out_training=args.do_held_out_training,
                         held_out_class=held_out_class,
-                        use_nis_embedding=args.use_nis_embedding,
-                        random_dropout=args.random_dropout)
+                        use_nis_embedding=True,
+                        class_dropout=args.class_dropout,
+                        cl2n=args.cl2n,
+                        device=args.device)
     else:
         raise NotImplementedError()
     summary(network)
     network.to(args.device)
 
     # Set loss, optimizer, and scheduler
-    criterion = torch.nn.NLLLoss()
+    if args.label_smoothing > 0:
+        criterion = SmoothNLLLoss(smoothing=args.label_smoothing)
+    else:
+        criterion = torch.nn.NLLLoss()
     optimizer = torch.optim.SGD(network.parameters(), 
                                 lr=args.lr, 
                                 momentum=0.9, 
@@ -296,15 +307,22 @@ def main():
             'ece_heldout:val:random',
             'ece_heldout:val:full',
             'ece_heldout:val:cluster',
+
+            'loss_nis:val:random',
+            'loss_nis:val:full',
+            'loss_nis:val:cluster',
+            'acc_nis:val:random',
+            'acc_nis:val:full',
+            'acc_nis:val:cluster',
+            'ece_nis:val:random',
+            'ece_nis:val:full',
+            'ece_nis:val:cluster',
         ] 
     else:
         list_of_val_metrics = [
             'loss:val',
             'acc:val',
             'ece:val',
-            'loss_heldout:val',
-            'acc_heldout:val',
-            'ece_heldout:val',
         ] 
     args.metrics = {}
     args.metrics.update({key: Metric() for key in list_of_metrics})
@@ -330,11 +348,10 @@ def main():
 
         # Heldout evaluation
         if args.train_method == 'nwhead':
-            # heldout_eval_epoch(heldout_val_loader, network, criterion, optimizer, args, mode='random')
-            heldout_eval_epoch(heldout_val_loader, network, criterion, optimizer, args, mode='full')
-            # heldout_eval_epoch(heldout_val_loader, network, criterion, optimizer, args, mode='cluster')
-        else:
-            acc1 = heldout_eval_epoch(heldout_val_loader, network, criterion, optimizer, args)
+            eval_epoch(heldout_val_loader, network, criterion, optimizer, args, mode='random', key_suffix='_heldout')
+            eval_epoch(heldout_val_loader_nis, network, criterion, optimizer, args, mode='random', key_suffix='_nis')
+            eval_epoch(heldout_val_loader, network, criterion, optimizer, args, mode='full', key_suffix='_heldout')
+            eval_epoch(heldout_val_loader_nis, network, criterion, optimizer, args, mode='full', key_suffix='_nis')
 
         train_epoch(train_loader, network, criterion, optimizer, args)
         scheduler.step()
@@ -386,7 +403,7 @@ def train_epoch(train_loader, network, criterion, optimizer, args):
         if i == args.num_steps_per_epoch:
             break
 
-def eval_epoch(val_loader, network, criterion, optimizer, args, mode='random'):
+def eval_epoch(val_loader, network, criterion, optimizer, args, mode='random', key_suffix=''):
     '''Eval for one epoch.'''
     network.eval()
 
@@ -396,12 +413,12 @@ def eval_epoch(val_loader, network, criterion, optimizer, args, mode='random'):
         total=min(len(val_loader), args.num_val_steps_per_epoch)):
         if args.train_method == 'fchead':
             step_res = fc_step(batch, network, criterion, optimizer, args, is_train=False)
-            args.val_metrics['loss:val'].update_state(step_res['loss'], step_res['batch_size'])
-            args.val_metrics['acc:val'].update_state(step_res['acc'], step_res['batch_size'])
+            args.val_metrics[f'loss{key_suffix}:val'].update_state(step_res['loss'], step_res['batch_size'])
+            args.val_metrics[f'acc{key_suffix}:val'].update_state(step_res['acc'], step_res['batch_size'])
         else:
             step_res = nw_step(batch, network, criterion, optimizer, args, is_train=False, mode=mode)
-            args.val_metrics[f'loss:val:{mode}'].update_state(step_res['loss'], step_res['batch_size'])
-            args.val_metrics[f'acc:val:{mode}'].update_state(step_res['acc'], step_res['batch_size'])
+            args.val_metrics[f'loss{key_suffix}:val:{mode}'].update_state(step_res['loss'], step_res['batch_size'])
+            args.val_metrics[f'acc{key_suffix}:val:{mode}'].update_state(step_res['acc'], step_res['batch_size'])
         probs.append(step_res['prob'])
         gts.append(step_res['gt'])
         if i == args.num_val_steps_per_epoch:
@@ -409,40 +426,11 @@ def eval_epoch(val_loader, network, criterion, optimizer, args, mode='random'):
     
     ece = (ECELoss()(torch.cat(probs, dim=0), torch.cat(gts, dim=0)) * 100).item()
     if args.train_method == 'fchead':
-        args.val_metrics['ece:val'].update_state(ece, 1)
-        return args.val_metrics['acc:val'].result()
+        args.val_metrics[f'ece{key_suffix}:val'].update_state(ece, 1)
+        return args.val_metrics[f'acc{key_suffix}:val'].result()
     else:
-        args.val_metrics[f'ece:val:{mode}'].update_state(ece, 1)
-        return args.val_metrics[f'acc:val:{mode}'].result()
-
-def heldout_eval_epoch(val_loader, network, criterion, optimizer, args, mode='random'):
-    '''Eval for one epoch.'''
-    network.eval()
-
-    probs = []
-    gts = []
-    for i, batch in tqdm(enumerate(val_loader), 
-        total=min(len(val_loader), args.num_val_steps_per_epoch)):
-        if args.train_method == 'fchead':
-            step_res = fc_step(batch, network, criterion, optimizer, args, is_train=False)
-            args.val_metrics['loss_heldout:val'].update_state(step_res['loss'], step_res['batch_size'])
-            args.val_metrics['acc_heldout:val'].update_state(step_res['acc'], step_res['batch_size'])
-        else:
-            step_res = nw_step(batch, network, criterion, optimizer, args, is_train=False, mode=mode)
-            args.val_metrics[f'loss_heldout:val:{mode}'].update_state(step_res['loss'], step_res['batch_size'])
-            args.val_metrics[f'acc_heldout:val:{mode}'].update_state(step_res['acc'], step_res['batch_size'])
-        probs.append(step_res['prob'])
-        gts.append(step_res['gt'])
-        if i == args.num_val_steps_per_epoch:
-            break
-    
-    ece = (ECELoss()(torch.cat(probs, dim=0), torch.cat(gts, dim=0)) * 100).item()
-    if args.train_method == 'fchead':
-        args.val_metrics['ece_heldout:val'].update_state(ece, 1)
-        return args.val_metrics['acc_heldout:val'].result()
-    else:
-        args.val_metrics[f'ece_heldout:val:{mode}'].update_state(ece, 1)
-        return args.val_metrics[f'acc_heldout:val:{mode}'].result()
+        args.val_metrics[f'ece{key_suffix}:val:{mode}'].update_state(ece, 1)
+        return args.val_metrics[f'acc{key_suffix}:val:{mode}'].result()
 
 def fc_step(batch, network, criterion, optimizer, args, is_train=True):
     '''Train/val for one step.'''

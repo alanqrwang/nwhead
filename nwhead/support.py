@@ -18,7 +18,7 @@ class SupportSet:
                  num_clusters=3,
                  do_held_out_training=False,
                  held_out_class=None,
-                 random_dropout=False):
+                 class_dropout=0):
         self.train_type = train_type
         self.num_per_class = num_per_class
         self.y_array = np.array(support_set.targets)
@@ -27,7 +27,7 @@ class SupportSet:
         self.num_clusters = num_clusters
         self.do_held_out_training = do_held_out_training
         self.held_out_class = held_out_class
-        self.random_dropout = random_dropout
+        self.class_dropout = class_dropout
 
         # If env_array is provided, then support dataset should be a single
         # Pytorch Dataset. 
@@ -135,7 +135,7 @@ class SupportSet:
         Samples images from dataset.'''
         if self.train_type == 'random':
             train_iter = InfiniteUniformClassLoader(
-                self.combined_dataset, self.num_per_class, self.subsample_classes, self.do_held_out_training, self.held_out_class, random_dropout=self.random_dropout)
+                self.combined_dataset, self.num_per_class, self.subsample_classes, self.do_held_out_training, self.held_out_class, class_dropout=self.class_dropout)
         elif self.train_type == 'unbalanced':
             # Compute remaining images so that it matches uniform class loading
             remaining = (self.num_per_class-1)*self.num_classes
