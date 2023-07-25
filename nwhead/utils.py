@@ -73,16 +73,16 @@ class InfiniteRandomLoader(DataLoader):
         return self.__next__()
 
 class UniformClassLoader(DataLoader):
-    def __init__(self, dataset, total_per_class):
+    def __init__(self, dataset, n_shot):
         self.dataset = dataset
         y_array = dataset.targets
 
         self.indices = get_separated_indices(y_array)
-        self.total_per_class = total_per_class
+        self.n_shot = n_shot
         super(UniformClassLoader, self).__init__(dataset)
 
     def __len__(self):
-        return self.total_per_class
+        return self.n_shot
 
     def __iter__(self):
         self.i = 0
@@ -91,7 +91,7 @@ class UniformClassLoader(DataLoader):
 
     def __next__(self):
         self.i += 1
-        if self.i > self.total_per_class:
+        if self.i > self.n_shot:
             raise StopIteration
 
         indices = [next(l) for l in self.class_iters]
@@ -104,25 +104,18 @@ class UniformClassLoader(DataLoader):
 class InfiniteUniformClassLoader(DataLoader):
     def __init__(self,
                  dataset,
-                 num_per_class,
-                 subsample_classes=None,
-                 do_held_out_training=False,
-                 held_out_class=None,
-                 class_dropout=0
+                 n_shot,
+                 n_way=None,
                  ):
         self.dataset = dataset
         y_array = dataset.targets
         self.indices = get_separated_indices(y_array)
-        if do_held_out_training:
-            del self.indices[held_out_class]
-        self.num_classes = len(self.indices)
-        self.subsample_classes = subsample_classes
-        self.class_dropout = class_dropout
-        if subsample_classes:
-            assert subsample_classes <= len(self.indices)
-            assert self.class_dropout <= subsample_classes
+        self.n_classes = len(self.indices)
+        self.n_shot = n_shot
+        self.n_way = n_way
+        if n_way:
+            assert n_way <= len(self.indices)
 
-        self.num_per_class = num_per_class
         super(InfiniteUniformClassLoader, self).__init__(dataset)
 
     def __iter__(self):
@@ -131,17 +124,14 @@ class InfiniteUniformClassLoader(DataLoader):
     def __next__(self):
         raise NotImplementedError
 
-    def next(self, qy=None):
-        if self.subsample_classes:
+    def next(self, qy):
+        if self.n_way:
+            assert len(qy) <= self.n_way, "qy must be smaller than n_way"
             qy = qy.cpu().detach().numpy()
             probs = np.ones(len(self.indices))
             probs[qy] = 0
             probs /= probs.sum()
-            subclasses = np.random.choice(self.num_classes, size=(self.subsample_classes-len(qy)), replace=False, p=probs)
-
-            # Class dropout
-            drop_idx = np.nonzero(np.random.binomial(1, p=self.class_dropout, size=len(qy)))[0]
-            qy = np.delete(qy, drop_idx)
+            subclasses = np.random.choice(self.n_classes, size=(self.n_way-len(qy)), replace=False, p=probs)
 
             subclasses = np.concatenate([subclasses, qy])
             indices = [self.indices[i] for i in subclasses] 
@@ -149,7 +139,7 @@ class InfiniteUniformClassLoader(DataLoader):
             indices = self.indices
 
         support_idxs = np.array([np.random.choice(
-            row, size=self.num_per_class, replace=False) for row in indices]).flatten()
+            row, size=self.n_shot, replace=False) for row in indices]).flatten()
 
         # Get support data from dataset and collate into mini-batch
         return self.collate_fn([self.dataset[i] for i in support_idxs])
