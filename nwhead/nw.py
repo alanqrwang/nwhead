@@ -31,6 +31,8 @@ class NWNet(nn.Module):
                  nis_scalar=None,
                  cl2n=False,
                  debug_mode=False,
+                 device='cuda:0',
+                 return_mask=False,
                  ):
         '''
         Top level NW net class. Creates kernel, NWHead, and SupportSet as modules.
@@ -63,14 +65,16 @@ class NWNet(nn.Module):
         self.nis_scalar = nis_scalar
         self.n_shot = n_shot
         self.class_dropout = class_dropout
+        self.device = device
+        self.return_mask = return_mask
         if support_dataset is not None:
             assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
         # Kernel
-        kernel = get_kernel(kernel_type)
+        self.kernel = get_kernel(kernel_type)
 
         # NW Head
-        self.nwhead = NWHead(kernel=kernel,
+        self.nwhead = NWHead(kernel=self.kernel,
                              feat_dim=feat_dim,
                              proj_dim=proj_dim,
                              cl2n=cl2n,
@@ -79,16 +83,16 @@ class NWNet(nn.Module):
 
         # Support dataset
         if support_dataset is not None:
-            self.sset = SupportSet(support_dataset,
-                               train_type,
-                               n_shot,
-                               n_shot_full,
-                               self.n_classes,
-                               n_clusters=n_clusters,
-                               n_way=n_way,
-                               env_array=env_array,
-                               nis_scalar=nis_scalar
-                               )
+            self.support_set = SupportSet(support_dataset,
+                                          train_type,
+                                          n_shot,
+                                          n_shot_full,
+                                          self.n_classes,
+                                          n_clusters=n_clusters,
+                                          n_way=n_way,
+                                          env_array=env_array,
+                                          nis_scalar=nis_scalar
+                                          )
 
         # NIS
         if self.nis_scalar:
@@ -99,7 +103,9 @@ class NWNet(nn.Module):
            random iterator. Call before running inference.'''
         assert not self.featurizer.training
         sinfo = self._compute_all_support_feats()
-        self.sset.update_feats(*sinfo)
+        self.full_feat = sinfo[0]
+        self.full_y = sinfo[1]
+        self.support_set.build_infer_iters(*sinfo)
 
     def predict(self, x, mode='random', support_data=None):
         '''
@@ -114,7 +120,7 @@ class NWNet(nn.Module):
             sx, sy, sm = support_data
             sfeat = self.featurizer(sx)
         else:
-            sfeat, sy = self.sset.get_infer_support(mode)
+            sfeat, sy = self.support_set.get_infer_support(mode, x=qfeat)
 
         if self.debug_mode:
             print('qx shape:', x.shape)
@@ -129,10 +135,16 @@ class NWNet(nn.Module):
                     x.device), env_y.to(x.device)
                 output = self._forward(qfeat, env_feat, env_y)
                 outputs += output.exp()
-            return torch.log(outputs / num_envs)#, torch.full((len(x),), True)
+            if self.return_mask:
+                return torch.log(outputs / num_envs), torch.full((len(x),), True)
+            else:
+                return torch.log(outputs / num_envs)
         else:
             sfeat, sy = sfeat.to(x.device), sy.to(x.device)
-            return self._forward(qfeat, sfeat, sy)#, torch.full((len(x),), True)
+            if self.return_mask:
+                return self._forward(qfeat, sfeat, sy), torch.full((len(x),), True)
+            else:
+                return self._forward(qfeat, sfeat, sy)
 
     def forward(self, x, y, metadata=None, support_data=None):
         '''
@@ -147,7 +159,7 @@ class NWNet(nn.Module):
         if support_data is not None:
             sx, sy, sm = support_data
         else:
-            sx, sy, sm = self.sset.get_train_support(y, metadata)
+            sx, sy, sm = self.support_set.get_train_support(y, metadata)
         if sm is None:
             sm = torch.zeros_like(sy)
 
@@ -192,7 +204,10 @@ class NWNet(nn.Module):
                 print('qy after nis:', y)
                 print('sy after nis:', sy)
 
-        return self._forward(qfeat, sfeat, sy)#, isin
+        if self.return_mask:
+            return self._forward(qfeat, sfeat, sy), isin
+        else:
+            return self._forward(qfeat, sfeat, sy)
     
     def _class_dropout(self, qy, sx, sy, sm):
         '''Randomly drops matching classes from support set.'''
@@ -204,14 +219,20 @@ class NWNet(nn.Module):
         return sx[keep_idx], sy[keep_idx], sm[keep_idx]
 
     def _forward(self, qfeat, sfeat, sy):
-        '''Forward pass on features'''
+        '''Forward pass on features.
+        
+        :param qfeat: Query features (bs, dim)
+        :param sfeat: Support features (N, dim) or (bs, N, dim)
+        :param sy: Support labels (N) or (bs, N)
+        '''
         batch_size = len(qfeat)
         if self.nis_scalar:
             sy = F.one_hot(sy, self.n_classes+1).float()
         else:
             sy = F.one_hot(sy, self.n_classes).float()
-        sfeat = sfeat[None].expand(batch_size, *sfeat.shape)
-        sy = sy[None].expand(batch_size, *sy.shape)
+        if len(sfeat.shape) == len(qfeat.shape):
+            sfeat = sfeat[None].expand(batch_size, *sfeat.shape)
+            sy = sy[None].expand(batch_size, *sy.shape)
         output = self.nwhead(qfeat, sfeat, sy)
         return torch.log(output+1e-12)
 
@@ -222,7 +243,7 @@ class NWNet(nn.Module):
         separated_feats = []
         separated_labels = []
         separated_meta = []
-        for loader in self.sset.support_loaders:
+        for loader in self.support_set.support_loaders:
             env_feats = []
             env_labels = []
             env_meta = []
@@ -246,6 +267,17 @@ class NWNet(nn.Module):
         meta = torch.cat(meta, dim=0)
 
         return feats, labels, meta, separated_feats, separated_labels, separated_meta
+    
+    def get_neighbors(self, x):
+        '''Returns indices of nearest neighbors of x in support set.'''
+        qfeat = self.featurizer(x).cpu().detach()
+        distances = self.kernel(qfeat, self.full_feat)
+        return torch.argsort(distances, dim=-1, descending=True)
+
+    # def get_influences(self, x):
+    #     '''Returns support influence of x in support set.'''
+    #     distances = -torch.cdist(x, self.full_feat)
+    #     return self.support_set.get_neighbors()
 
 class NWHead(nn.Module):
     def __init__(self, 

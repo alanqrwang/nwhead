@@ -3,7 +3,7 @@ import random
 import torch
 from torch.utils.data import Dataset, ConcatDataset
 from sklearn.cluster import KMeans
-from .utils import DatasetMetadata, FeatureDataset, UniformClassLoader, InfiniteUniformClassLoader, InfiniteRandomLoader
+from .utils import DatasetMetadata, FeatureDataset, InfiniteUniformClassLoader, FullDataset, HNSW, KNN
 
 class SupportSet:
     '''Support set for NW.'''
@@ -36,7 +36,7 @@ class SupportSet:
         # If env_array is provided, then support dataset should be a single
         # Pytorch Dataset. 
         if env_array is not None:
-            assert train_type in ['match', 'mixmatch']
+            # assert train_type in ['match', 'mixmatch']
             self.env_array = env_array
             support_set = DatasetMetadata(support_set, self.env_array)
             self.combined_dataset = support_set
@@ -63,7 +63,8 @@ class SupportSet:
 
         self.train_iter = self._build_train_iter()
 
-    def update_feats(self, sfeat, sy, smeta, sfeat_env, sy_env, smeta_env):
+    def build_infer_iters(self, sfeat, sy, smeta, sfeat_env, sy_env, smeta_env):
+        # Full
         self.full_feat = sfeat
         self.full_y = sy
         self.full_meta = smeta
@@ -71,8 +72,18 @@ class SupportSet:
         self.full_y_sep = sy_env
         self.full_meta_sep = smeta_env
 
+        # Cluster
         self.cluster_feat, self.cluster_y = self._compute_clusters()
-        self.random_iter = self._build_random_support_iter()
+
+        # Random
+        feat_dataset = FeatureDataset(self.full_feat, self.full_y, self.full_meta)
+        eval_loader = InfiniteUniformClassLoader(
+            feat_dataset, self.n_shot)
+        self.random_iter = iter(eval_loader)
+
+        # KNN and HNSW
+        self.knn = KNN(self.full_feat, self.full_y, n_neighbors=20)
+        self.hnsw = HNSW(self.full_feat, self.full_y, n_neighbors=20)
 
     def get_train_support(self, y, env_index):
         '''Samples a support for training.'''
@@ -98,7 +109,7 @@ class SupportSet:
 
         return sx, sy, sm
 
-    def get_infer_support(self, mode):
+    def get_infer_support(self, mode, x=None):
         '''Samples a support for inference depending on mode.'''
         try:
             if mode == 'random':
@@ -109,6 +120,10 @@ class SupportSet:
                 sfeat, sy = self.cluster_feat, self.cluster_y
             elif mode == 'ensemble':
                 sfeat, sy = self.full_feat_sep, self.full_y_sep
+            elif mode == 'knn':
+                sfeat, sy = self.knn(x)
+            elif mode == 'hnsw':
+                sfeat, sy = self.hnsw(x)
             else:
                 raise NotImplementedError
 
@@ -120,7 +135,7 @@ class SupportSet:
                     n_shot = self.n_shot_full
                 elif mode == 'cluster':
                     n_shot = self.n_clusters
-                elif mode == 'ensemble':
+                else:
                     raise NotImplementedError # TODO
 
                 nis_class = torch.full((n_shot,), self.nis_class).to(sy.device)
@@ -163,15 +178,11 @@ class SupportSet:
         Because the model assumes balanced classes during training and
         test, the support loader samples evenly across classes.
         '''
-        return [UniformClassLoader(env, n_shot=self.n_shot_full) for env in self.env_datasets]
-
-    def _build_random_support_iter(self):
-        '''Iterator for random sampling during evaluation.
-        Samples features from precomputed feature dataset.'''
-        feat_dataset = FeatureDataset(self.full_feat, self.full_y, self.full_meta)
-        eval_loader = InfiniteUniformClassLoader(
-            feat_dataset, self.num_per_class)
-        return iter(eval_loader)
+        self.full_datasets = []
+        for env in self.env_datasets:
+            self.full_datasets.append(FullDataset(env, self.n_shot_full))
+        return [torch.utils.data.DataLoader(
+                env, batch_size=128, shuffle=False, num_workers=0) for env in self.full_datasets]
 
     def _compute_clusters(self, closest=False):
         '''Performs k-means clustering to find support set.
