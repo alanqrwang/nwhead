@@ -11,15 +11,9 @@ class SupportSet:
                  support_set, 
                  n_classes,
                  env_array=None,
-                 nis_scalar=None,
                  ):
         self.y_array = np.array(support_set.targets)
         self.n_classes = n_classes
-        self.nis_scalar = nis_scalar
-
-        # NIS
-        if self.nis_scalar:
-            self.nis_class = self.n_classes
 
         # If env_array is provided, then support dataset should be a single
         # Pytorch Dataset. 
@@ -71,9 +65,8 @@ class SupportSetTrain(SupportSet):
                  n_shot, 
                  n_way=None,
                  env_array=None,
-                 nis_scalar=None,
                  ):
-        super().__init__(support_set, n_classes, env_array, nis_scalar)
+        super().__init__(support_set, n_classes, env_array)
         self.train_type = train_type
         self.n_shot = n_shot
         self.n_way = n_way
@@ -93,13 +86,8 @@ class SupportSetTrain(SupportSet):
             sx, sy, sm = self.train_iter.next(y)
 
         # Occasionally verify sampled classes
-        if random.random() < 0.01 and self.train_type != 'unbalanced':
+        if random.random() < 0.01:
             self._verify_sy(sy)
-
-        # Add NIS class if specified
-        if self.nis_scalar:
-            nis_class = torch.full((self.n_shot,), self.nis_class).to(sy.device)
-            sy = torch.cat((sy, nis_class))
 
         return sx, sy, sm
 
@@ -115,10 +103,11 @@ class SupportSetTrain(SupportSet):
         return train_iter
 
     def _verify_sy(self, sy):
-        # unique_labels, counts = torch.unique(sy, return_counts=True)
-        # assert torch.equal(unique_labels, torch.arange(self.n_classes))
-        # assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
-        pass
+        if self.train_type == 'unbalanced':
+            pass
+        unique_labels, counts = torch.unique(sy, return_counts=True)
+        assert torch.equal(unique_labels, torch.arange(self.n_classes))
+        assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
 
 class SupportSetEval(SupportSet):
     '''Support set for NW evaluation.'''
@@ -130,9 +119,8 @@ class SupportSetEval(SupportSet):
                  n_shot_cluster=3,
                  n_neighbors=20,
                  env_array=None,
-                 nis_scalar=None,
                  ):
-        super().__init__(support_set, n_classes, env_array, nis_scalar)
+        super().__init__(support_set, n_classes, env_array)
         self.n_shot_random = n_shot_random
         self.n_shot_full = n_shot_full
         self.n_shot_cluster = n_shot_cluster
@@ -196,7 +184,6 @@ class SupportSetEval(SupportSet):
     def _compute_clusters(self, closest=False):
         '''Performs k-means clustering to find support set.
         
-        :param num_clusters: Number of cluster centroids per class.
         :param closest: If True, uses support features closest to cluster centroids. Otherwise,
                     uses true cluster centroids.
         '''

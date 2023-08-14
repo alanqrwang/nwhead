@@ -97,7 +97,6 @@ class NWNet(nn.Module):
                                       self.n_shot,
                                       n_way=self.n_way,
                                       env_array=self.env_array,
-                                      nis_scalar=self.nis_scalar
                                       )
             self.support_eval = SupportSetEval(support_dataset,
                                       self.n_classes,
@@ -106,7 +105,6 @@ class NWNet(nn.Module):
                                       n_shot_cluster=self.n_shot_cluster,
                                       n_neighbors=self.n_neighbors,
                                       env_array=self.env_array,
-                                      nis_scalar=self.nis_scalar
                                       )
 
         # NIS
@@ -122,7 +120,6 @@ class NWNet(nn.Module):
                                       n_shot_cluster=self.n_shot_cluster,
                                       n_neighbors=self.n_neighbors,
                                       env_array=self.env_array,
-                                      nis_scalar=self.nis_scalar
                                       )
 
     def precompute(self):
