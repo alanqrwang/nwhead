@@ -6,27 +6,15 @@ from sklearn.cluster import KMeans
 from .utils import DatasetMetadata, FeatureDataset, InfiniteUniformClassLoader, FullDataset, HNSW, KNN
 
 class SupportSet:
-    '''Support set for NW.'''
+    '''Support set base class for NW.'''
     def __init__(self, 
                  support_set, 
-                 train_type, 
-                 n_shot, 
-                 n_shot_full, 
                  n_classes,
-                 n_way=None,
                  env_array=None,
-                 n_clusters=3,
-                 class_dropout=0,
                  nis_scalar=None,
                  ):
-        self.train_type = train_type
-        self.n_shot = n_shot
-        self.n_shot_full = n_shot_full
         self.y_array = np.array(support_set.targets)
         self.n_classes = n_classes
-        self.n_way = n_way
-        self.n_clusters = n_clusters
-        self.class_dropout = class_dropout
         self.nis_scalar = nis_scalar
 
         # NIS
@@ -36,7 +24,6 @@ class SupportSet:
         # If env_array is provided, then support dataset should be a single
         # Pytorch Dataset. 
         if env_array is not None:
-            # assert train_type in ['match', 'mixmatch']
             self.env_array = env_array
             support_set = DatasetMetadata(support_set, self.env_array)
             self.combined_dataset = support_set
@@ -44,7 +31,6 @@ class SupportSet:
         # Otherwise, it should be a list of Datasets.
         elif env_array is None and all(isinstance(d, Dataset) for d in support_set):
             assert all(isinstance(d, Dataset) for d in support_set)
-            assert train_type in ['match', 'mixmatch']
             self.env_array = []
             for i, ds in enumerate(support_set):
                 self.env_array += [i for _ in range(len(ds))]
@@ -53,39 +39,47 @@ class SupportSet:
             self.combined_dataset = self._combine_env_datasets(support_set)
         # Simplest case, no environment info and single support dataset
         else:
-            assert train_type in ['random', 'unbalanced']
             self.env_array = np.zeros(len(support_set))
             support_set = DatasetMetadata(support_set, self.env_array)
             self.combined_dataset = support_set
             self.env_datasets = self._separate_env_datasets(support_set)
 
-        self.support_loaders = self._build_full_loader()
+    def _combine_env_datasets(self, env_datasets):
+        self.env_map = {i:i for i in range(len(env_datasets))}
+        combined_dataset = ConcatDataset(env_datasets)
+        combined_dataset.targets = np.concatenate([env.targets for env in self.env_datasets])
+        assert len(combined_dataset) == len(combined_dataset.targets)
+        return combined_dataset
 
-        self.train_iter = self._build_train_iter()
+    def _separate_env_datasets(self, combined_dataset):
+        env_datasets = []
+        self.env_map = {}
+        for i, attr in enumerate(np.unique(self.env_array)):
+            self.env_map[attr] = i
+            indices = (self.env_array==attr).nonzero()[0]
+            env_dataset = torch.utils.data.Subset(combined_dataset, indices)
+            env_dataset.targets = self.y_array[indices]
+            env_datasets.append(env_dataset)
+        return env_datasets
 
-    def build_infer_iters(self, sfeat, sy, smeta, sfeat_env, sy_env, smeta_env):
-        # Full
-        self.full_feat = sfeat
-        self.full_y = sy
-        self.full_meta = smeta
-        self.full_feat_sep = sfeat_env
-        self.full_y_sep = sy_env
-        self.full_meta_sep = smeta_env
+class SupportSetTrain(SupportSet):
+    '''Support set for NW training.'''
+    def __init__(self, 
+                 support_set, 
+                 n_classes,
+                 train_type, 
+                 n_shot, 
+                 n_way=None,
+                 env_array=None,
+                 nis_scalar=None,
+                 ):
+        super().__init__(support_set, n_classes, env_array, nis_scalar)
+        self.train_type = train_type
+        self.n_shot = n_shot
+        self.n_way = n_way
+        self.train_iter = self._build_iter()
 
-        # Cluster
-        self.cluster_feat, self.cluster_y = self._compute_clusters()
-
-        # Random
-        feat_dataset = FeatureDataset(self.full_feat, self.full_y, self.full_meta)
-        eval_loader = InfiniteUniformClassLoader(
-            feat_dataset, self.n_shot)
-        self.random_iter = iter(eval_loader)
-
-        # KNN and HNSW
-        self.knn = KNN(self.full_feat, self.full_y, n_neighbors=20)
-        self.hnsw = HNSW(self.full_feat, self.full_y, n_neighbors=20)
-
-    def get_train_support(self, y, env_index):
+    def get_support(self, y, env_index):
         '''Samples a support for training.'''
         if self.train_type == 'mixmatch':
             train_iter = np.random.choice(self.train_iter)
@@ -109,7 +103,65 @@ class SupportSet:
 
         return sx, sy, sm
 
-    def get_infer_support(self, mode, x=None):
+    def _build_iter(self):
+        '''Iterators for random sampling during training.
+        Samples images from dataset.'''
+        if self.train_type == 'random':
+            train_iter = InfiniteUniformClassLoader(
+                self.combined_dataset, self.n_shot, 
+                self.n_way)
+        else:
+            train_iter = [iter(InfiniteUniformClassLoader(env, self.n_shot)) for env in self.env_datasets]
+        return train_iter
+
+    def _verify_sy(self, sy):
+        # unique_labels, counts = torch.unique(sy, return_counts=True)
+        # assert torch.equal(unique_labels, torch.arange(self.n_classes))
+        # assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
+        pass
+
+class SupportSetEval(SupportSet):
+    '''Support set for NW evaluation.'''
+    def __init__(self, 
+                 support_set, 
+                 n_classes,
+                 n_shot_random,
+                 n_shot_full, 
+                 n_shot_cluster=3,
+                 n_neighbors=20,
+                 env_array=None,
+                 nis_scalar=None,
+                 ):
+        super().__init__(support_set, n_classes, env_array, nis_scalar)
+        self.n_shot_random = n_shot_random
+        self.n_shot_full = n_shot_full
+        self.n_shot_cluster = n_shot_cluster
+        self.n_neighbors = n_neighbors
+        self.support_loaders = self._build_full_loader()
+
+    def build_infer_iters(self, sfeat, sy, smeta, sfeat_env, sy_env, smeta_env):
+        # Full
+        self.full_feat = sfeat
+        self.full_y = sy
+        self.full_meta = smeta
+        self.full_feat_sep = sfeat_env
+        self.full_y_sep = sy_env
+        self.full_meta_sep = smeta_env
+
+        # Cluster
+        self.cluster_feat, self.cluster_y = self._compute_clusters()
+
+        # Random
+        feat_dataset = FeatureDataset(self.full_feat, self.full_y, self.full_meta)
+        eval_loader = InfiniteUniformClassLoader(
+            feat_dataset, self.n_shot_random)
+        self.random_iter = iter(eval_loader)
+
+        # KNN and HNSW
+        self.knn = KNN(self.full_feat, self.full_y, n_neighbors=self.n_neighbors)
+        self.hnsw = HNSW(self.full_feat, self.full_y, n_neighbors=self.n_neighbors)
+
+    def get_support(self, mode, x=None):
         '''Samples a support for inference depending on mode.'''
         try:
             if mode == 'random':
@@ -126,52 +178,9 @@ class SupportSet:
                 sfeat, sy = self.hnsw(x)
             else:
                 raise NotImplementedError
-
-            # Add NIS class if specified
-            if self.nis_scalar:
-                if mode == 'random':
-                    n_shot = self.n_shot
-                elif mode == 'full':
-                    n_shot = self.n_shot_full
-                elif mode == 'cluster':
-                    n_shot = self.n_clusters
-                else:
-                    raise NotImplementedError # TODO
-
-                nis_class = torch.full((n_shot,), self.nis_class).to(sy.device)
-                sy = torch.cat((sy, nis_class))
             return sfeat, sy
         except AttributeError:
-            print('Did you run precompute()?')
-
-    def _combine_env_datasets(self, env_datasets):
-        self.env_map = {i:i for i in range(len(env_datasets))}
-        combined_dataset = ConcatDataset(env_datasets)
-        combined_dataset.targets = np.concatenate([env.targets for env in self.env_datasets])
-        assert len(combined_dataset) == len(combined_dataset.targets)
-        return combined_dataset
-
-    def _separate_env_datasets(self, combined_dataset):
-        env_datasets = []
-        self.env_map = {}
-        for i, attr in enumerate(np.unique(self.env_array)):
-            self.env_map[attr] = i
-            indices = (self.env_array==attr).nonzero()[0]
-            env_dataset = torch.utils.data.Subset(combined_dataset, indices)
-            env_dataset.targets = self.y_array[indices]
-            env_datasets.append(env_dataset)
-        return env_datasets
-
-    def _build_train_iter(self):
-        '''Iterators for random sampling during training.
-        Samples images from dataset.'''
-        if self.train_type == 'random':
-            train_iter = InfiniteUniformClassLoader(
-                self.combined_dataset, self.n_shot, 
-                self.n_way)
-        else:
-            train_iter = [iter(InfiniteUniformClassLoader(env, self.n_shot)) for env in self.env_datasets]
-        return train_iter
+            raise AttributeError('Did you run precompute()?')
 
     def _build_full_loader(self):
         '''Full loader for precomputing features during evaluation.
@@ -193,31 +202,27 @@ class SupportSet:
         '''
         embeddings = self.full_feat
         labels = self.full_y
+        n_clusters = self.n_shot_cluster
         img_ids = np.arange(len(embeddings))
-        sfeat = None
+        sfeat = []
         slabel = []
         for c in np.unique(labels):
             embeddings_class = embeddings[labels==c]
             img_ids_class = img_ids[labels==c]
-            kmeans = KMeans(n_clusters=self.n_clusters, random_state=0, n_init='auto').fit(embeddings_class)
+            kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(embeddings_class)
             centroids = torch.tensor(kmeans.cluster_centers_).float()
-            slabel += [c] * self.n_clusters 
+            slabel += [c] * n_clusters 
             if closest:
                 dist_matrix = torch.cdist(centroids, embeddings_class)
                 min_indices = dist_matrix.argmin(dim=-1)
                 dataset_indices = img_ids_class[min_indices]
-                if self.n_clusters == 1:
+                if n_clusters == 1:
                     dataset_indices = [dataset_indices]
                 closest_embedding = embeddings[dataset_indices]
-                sfeat = closest_embedding if sfeat is None else torch.cat((sfeat, closest_embedding), dim=0)
+                sfeat.append(closest_embedding)
             else:
-                sfeat = centroids if sfeat is None else torch.cat((sfeat, centroids), dim=0)
+                sfeat.append(centroids)
 
+        sfeat = torch.cat(sfeat, dim=0)
         slabel = torch.tensor(slabel)
         return sfeat, slabel
-
-    def _verify_sy(self, sy):
-        # unique_labels, counts = torch.unique(sy, return_counts=True)
-        # assert torch.equal(unique_labels, torch.arange(self.n_classes))
-        # assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
-        pass

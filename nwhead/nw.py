@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torchvision
 import numpy as np
-from .support import SupportSet
+from .support import SupportSetTrain, SupportSetEval
 from .kernel import get_kernel
 from .utils import linear_normalization
 from torch.nn.init import xavier_uniform_
@@ -24,8 +24,10 @@ class NWNet(nn.Module):
                  train_type='random', 
                  n_way=None,
                  n_shot=1, 
+                 n_shot_random=1, 
                  n_shot_full=100,
-                 n_clusters=3,
+                 n_shot_cluster=1,
+                 n_neighbors=10,
                  env_array=None, 
                  class_dropout=0,
                  nis_scalar=None,
@@ -60,10 +62,16 @@ class NWNet(nn.Module):
         super(NWNet, self).__init__()
         self.featurizer = featurizer
         self.train_type = train_type
+        self.n_way = n_way
         self.debug_mode = debug_mode
         self.n_classes = n_classes
         self.nis_scalar = nis_scalar
         self.n_shot = n_shot
+        self.n_shot_random = n_shot_random
+        self.n_shot_full = n_shot_full
+        self.n_shot_cluster = n_shot_cluster
+        self.n_neighbors = n_neighbors
+        self.env_array = env_array
         self.class_dropout = class_dropout
         self.device = device
         self.return_mask = return_mask
@@ -83,20 +91,39 @@ class NWNet(nn.Module):
 
         # Support dataset
         if support_dataset is not None:
-            self.support_set = SupportSet(support_dataset,
-                                          train_type,
-                                          n_shot,
-                                          n_shot_full,
-                                          self.n_classes,
-                                          n_clusters=n_clusters,
-                                          n_way=n_way,
-                                          env_array=env_array,
-                                          nis_scalar=nis_scalar
-                                          )
+            self.support_train = SupportSetTrain(support_dataset,
+                                      self.n_classes,
+                                      self.train_type,
+                                      self.n_shot,
+                                      n_way=self.n_way,
+                                      env_array=self.env_array,
+                                      nis_scalar=self.nis_scalar
+                                      )
+            self.support_eval = SupportSetEval(support_dataset,
+                                      self.n_classes,
+                                      self.n_shot_random,
+                                      self.n_shot_full,
+                                      n_shot_cluster=self.n_shot_cluster,
+                                      n_neighbors=self.n_neighbors,
+                                      env_array=self.env_array,
+                                      nis_scalar=self.nis_scalar
+                                      )
 
         # NIS
         if self.nis_scalar:
             self.nis_class = self.n_classes
+
+    def process_support_eval(self, support_dataset):
+        '''Processes support dataset into SupportSet object.'''
+        self.support_eval = SupportSetEval(support_dataset,
+                                      self.n_classes,
+                                      self.n_shot_random,
+                                      self.n_shot_full,
+                                      n_shot_cluster=self.n_shot_cluster,
+                                      n_neighbors=self.n_neighbors,
+                                      env_array=self.env_array,
+                                      nis_scalar=self.nis_scalar
+                                      )
 
     def precompute(self):
         '''Precomputes all support features, cluster centroids, and 
@@ -105,22 +132,32 @@ class NWNet(nn.Module):
         sinfo = self._compute_all_support_feats()
         self.full_feat = sinfo[0]
         self.full_y = sinfo[1]
-        self.support_set.build_infer_iters(*sinfo)
+        self.support_eval.build_infer_iters(*sinfo)
 
-    def predict(self, x, mode='random', support_data=None):
+    def predict(self, x, mode='random'):
         '''
         Perform prediction given test images.
         
         :param x: Input datapoints (bs, nch, l, w)
-        :param mode: Inference mode. One of ['random', 'full', 'cluster', 'ensemble']
-        :param support_data: Optional (sx, sy, sm) tuple for functional implementation
+        :param mode: Inference mode. 
+            One of ['random', 'full', 'cluster', 'ensemble', 'knn', 'hnsw']
         '''
         qfeat = self.featurizer(x)
-        if support_data is not None:
-            sx, sy, sm = support_data
-            sfeat = self.featurizer(sx)
-        else:
-            sfeat, sy = self.support_set.get_infer_support(mode, x=qfeat)
+        sfeat, sy = self.support_eval.get_support(mode, x=qfeat)
+
+        # Add NIS class if specified
+        if self.nis_scalar:
+            if mode == 'random':
+                n_shot = self.n_shot
+            elif mode == 'full':
+                n_shot = self.n_shot_full
+            elif mode == 'cluster':
+                n_shot = self.n_shot_cluster
+            else:
+                raise NotImplementedError # TODO
+
+            nis_class = torch.full((n_shot,), self.nis_class).to(sy.device)
+            sy = torch.cat((sy, nis_class))
 
         if self.debug_mode:
             print('qx shape:', x.shape)
@@ -159,7 +196,7 @@ class NWNet(nn.Module):
         if support_data is not None:
             sx, sy, sm = support_data
         else:
-            sx, sy, sm = self.support_set.get_train_support(y, metadata)
+            sx, sy, sm = self.support_train.get_support(y, metadata)
         if sm is None:
             sm = torch.zeros_like(sy)
 
@@ -168,7 +205,12 @@ class NWNet(nn.Module):
         if self.class_dropout > 0:
             sx, sy, sm = self._class_dropout(y, sx, sy, sm)
 
-        sx, sy = sx.to(x.device), sy.to(x.device)
+        # Add NIS class if specified
+        if self.nis_scalar:
+            n_shot = self.n_shot
+            nis_class = torch.full((n_shot,), self.nis_class).to(sy.device)
+            sy = torch.cat((sy, nis_class))
+
         batch_size = len(x)
         inputs = torch.cat((x, sx), dim=0)
         feats = self.featurizer(inputs)
@@ -226,7 +268,7 @@ class NWNet(nn.Module):
         :param sy: Support labels (N) or (bs, N)
         '''
         batch_size = len(qfeat)
-        if self.nis_scalar:
+        if self.nis_scalar is not None:
             sy = F.one_hot(sy, self.n_classes+1).float()
         else:
             sy = F.one_hot(sy, self.n_classes).float()
@@ -243,7 +285,7 @@ class NWNet(nn.Module):
         separated_feats = []
         separated_labels = []
         separated_meta = []
-        for loader in self.support_set.support_loaders:
+        for loader in self.support_eval.support_loaders:
             env_feats = []
             env_labels = []
             env_meta = []
