@@ -83,6 +83,7 @@ class NWNet(nn.Module):
 
         # NW Head
         self.nwhead = NWHead(kernel=self.kernel,
+                             n_classes=n_classes,
                              feat_dim=feat_dim,
                              proj_dim=proj_dim,
                              cl2n=cl2n,
@@ -167,7 +168,7 @@ class NWNet(nn.Module):
             for env_feat, env_y in zip(sfeat, sy):
                 env_feat, env_y = env_feat.to(
                     x.device), env_y.to(x.device)
-                output = self._forward(qfeat, env_feat, env_y)
+                output = self.nwhead(qfeat, env_feat, env_y)
                 outputs += output.exp()
             if self.return_mask:
                 return torch.log(outputs / num_envs), torch.full((len(x),), True)
@@ -176,9 +177,9 @@ class NWNet(nn.Module):
         else:
             sfeat, sy = sfeat.to(x.device), sy.to(x.device)
             if self.return_mask:
-                return self._forward(qfeat, sfeat, sy), torch.full((len(x),), True)
+                return self.nwhead(qfeat, sfeat, sy), torch.full((len(x),), True)
             else:
-                return self._forward(qfeat, sfeat, sy)
+                return self.nwhead(qfeat, sfeat, sy)
 
     def forward(self, x, y, metadata=None, support_data=None):
         '''
@@ -244,9 +245,9 @@ class NWNet(nn.Module):
                 print('sy after nis:', sy)
 
         if self.return_mask:
-            return self._forward(qfeat, sfeat, sy), isin
+            return self.nwhead(qfeat, sfeat, sy), isin
         else:
-            return self._forward(qfeat, sfeat, sy)
+            return self.nwhead(qfeat, sfeat, sy)
     
     def _class_dropout(self, qy, sx, sy, sm):
         '''Randomly drops matching classes from support set.'''
@@ -256,24 +257,6 @@ class NWNet(nn.Module):
         drop_labels = unique_qy[drop_idx]
         keep_idx = torch.nonzero(~torch.isin(sy, drop_labels)).flatten()
         return sx[keep_idx], sy[keep_idx], sm[keep_idx]
-
-    def _forward(self, qfeat, sfeat, sy):
-        '''Forward pass on features.
-        
-        :param qfeat: Query features (bs, dim)
-        :param sfeat: Support features (N, dim) or (bs, N, dim)
-        :param sy: Support labels (N) or (bs, N)
-        '''
-        batch_size = len(qfeat)
-        if self.nis_scalar is not None:
-            sy = F.one_hot(sy, self.n_classes+1).float()
-        else:
-            sy = F.one_hot(sy, self.n_classes).float()
-        if len(sfeat.shape) == len(qfeat.shape):
-            sfeat = sfeat[None].expand(batch_size, *sfeat.shape)
-            sy = sy[None].expand(batch_size, *sy.shape)
-        output = self.nwhead(qfeat, sfeat, sy)
-        return torch.log(output+1e-12)
 
     def _compute_all_support_feats(self):
         feats = []
@@ -321,6 +304,7 @@ class NWNet(nn.Module):
 class NWHead(nn.Module):
     def __init__(self, 
                  kernel, 
+                 n_classes,
                  feat_dim=None,
                  proj_dim=0, 
                  cl2n=False,
@@ -331,6 +315,7 @@ class NWHead(nn.Module):
         super(NWHead, self).__init__()
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
+        self.n_classes = n_classes
         self.proj_dim = proj_dim
         self.cl2n = cl2n
         self.momentum = momentum
@@ -351,38 +336,49 @@ class NWHead(nn.Module):
         bs = len(x)
         return torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
 
-    def forward(self, x, support_x, support_y):
+    def forward(self, x, sx, sy):
         """
         Computes Nadaraya-Watson head given query x, support x, and support y tensors.
-        :param x: (b, proj_dim)
-        :param support_x: (b, num_support, proj_dim)
-        :param support_y: (b, num_support, num_classes)
-        :return: softmaxed probabilities (b, num_classes)
+        :param x: Query data (b, feat_dim)
+        :param sx: Support data (num_support, feat_dim) or (b, num_support, feat_dim)
+            If b not provided, then uses same support set for all elements of mini-batch.
+        :param sy: Support targets (num_support) or (b, num_support)
+        :return: log of softmaxed probabilities (b, num_classes)
         """
+        batch_size = len(x)
+        if self.nis_scalar is not None:
+            sy = F.one_hot(sy, self.n_classes+1).float()
+        else:
+            sy = F.one_hot(sy, self.n_classes).float()
+        if len(sx.shape) == len(x.shape):
+            sx = sx[None].expand(batch_size, *sx.shape)
+            sy = sy[None].expand(batch_size, *sy.shape)
+
         x = x.unsqueeze(1)
         if self.proj_dim > 0:
             x = self.project(x)
-            support_x = self.project(support_x)
+            sx = self.project(sx)
 
         if self.cl2n:
             if self.training:
-                feat_mean = torch.cat([x.reshape(-1, x.shape[-1]), support_x.reshape(-1, x.shape[-1])], dim=0).mean(dim=0).detach()
+                feat_mean = torch.cat([x.reshape(-1, x.shape[-1]), sx.reshape(-1, x.shape[-1])], dim=0).mean(dim=0).detach()
 
                 # Update the mean using moving average
                 self.moving_mean = (1.0 - self.momentum) * self.moving_mean + self.momentum * feat_mean
             else:
                 feat_mean = self.moving_mean.to(x.device).detach()
             x = x - feat_mean
-            support_x = support_x - feat_mean
+            sx = sx - feat_mean
             x = F.normalize(x, dim=-1)
-            support_x = F.normalize(support_x, dim=-1)
+            sx = F.normalize(sx, dim=-1)
 
-        scores = self.kernel(x, support_x)
+        scores = self.kernel(x, sx)
 
         if self.nis_scalar:
             scores = torch.cat((scores, self.nis_scalar*torch.ones((len(scores), 1, 1)).to(scores.device)), dim=-1)
 
         probs = F.softmax(scores, dim=-1)
         # (B, num_queries, num_keys) x (B, num_keys=num_vals, num_classes) -> (B, num_queries, num_classes)
-        output = torch.bmm(probs, support_y)
-        return output.squeeze(1)
+        output = torch.bmm(probs, sy)
+        output = output.squeeze(1)
+        return torch.log(output+1e-12)
