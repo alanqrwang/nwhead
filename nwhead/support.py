@@ -2,8 +2,7 @@ import numpy as np
 import random
 import torch
 from torch.utils.data import Dataset, ConcatDataset
-from sklearn.cluster import KMeans
-from .utils import DatasetMetadata, FeatureDataset, InfiniteUniformClassLoader, FullDataset, HNSW, KNN
+from .utils import DatasetMetadata, FeatureDataset, InfiniteUniformClassLoader, FullDataset, HNSW, KNN, compute_clusters
 
 class SupportSet:
     '''Support set base class for NW.'''
@@ -107,7 +106,7 @@ class SupportSetTrain(SupportSet):
             pass
         unique_labels, counts = torch.unique(sy, return_counts=True)
         assert torch.equal(unique_labels, torch.arange(self.n_classes))
-        assert torch.equal(counts, torch.ones_like(unique_labels) * self.num_per_class) 
+        assert torch.equal(counts, torch.ones_like(unique_labels) * self.n_shot) 
 
 class SupportSetEval(SupportSet):
     '''Support set for NW evaluation.'''
@@ -137,7 +136,7 @@ class SupportSetEval(SupportSet):
         self.full_meta_sep = smeta_env
 
         # Cluster
-        self.cluster_feat, self.cluster_y = self._compute_clusters()
+        self.cluster_feat, self.cluster_y = compute_clusters(self.full_feat, self.full_y, self.n_shot_cluster)
 
         # Random
         feat_dataset = FeatureDataset(self.full_feat, self.full_y, self.full_meta)
@@ -180,36 +179,3 @@ class SupportSetEval(SupportSet):
             self.full_datasets.append(FullDataset(env, self.n_shot_full))
         return [torch.utils.data.DataLoader(
                 env, batch_size=128, shuffle=False, num_workers=0) for env in self.full_datasets]
-
-    def _compute_clusters(self, closest=False):
-        '''Performs k-means clustering to find support set.
-        
-        :param closest: If True, uses support features closest to cluster centroids. Otherwise,
-                    uses true cluster centroids.
-        '''
-        embeddings = self.full_feat
-        labels = self.full_y
-        n_clusters = self.n_shot_cluster
-        img_ids = np.arange(len(embeddings))
-        sfeat = []
-        slabel = []
-        for c in np.unique(labels):
-            embeddings_class = embeddings[labels==c]
-            img_ids_class = img_ids[labels==c]
-            kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(embeddings_class)
-            centroids = torch.tensor(kmeans.cluster_centers_).float()
-            slabel += [c] * n_clusters 
-            if closest:
-                dist_matrix = torch.cdist(centroids, embeddings_class)
-                min_indices = dist_matrix.argmin(dim=-1)
-                dataset_indices = img_ids_class[min_indices]
-                if n_clusters == 1:
-                    dataset_indices = [dataset_indices]
-                closest_embedding = embeddings[dataset_indices]
-                sfeat.append(closest_embedding)
-            else:
-                sfeat.append(centroids)
-
-        sfeat = torch.cat(sfeat, dim=0)
-        slabel = torch.tensor(slabel)
-        return sfeat, slabel

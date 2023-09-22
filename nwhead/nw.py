@@ -1,10 +1,9 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-import torchvision
-import numpy as np
 from .support import SupportSetTrain, SupportSetEval
 from .kernel import get_kernel
+from .nis import get_nis_module
 from .utils import linear_normalization
 from torch.nn.init import xavier_uniform_
 
@@ -30,11 +29,13 @@ class NWNet(nn.Module):
                  n_neighbors=10,
                  env_array=None, 
                  class_dropout=0,
-                 nis_scalar=None,
+                 nis_type='none',
+                 nis_scalar=-10.0,
                  cl2n=False,
                  debug_mode=False,
                  device='cuda:0',
                  return_mask=False,
+                 protonet=False,
                  ):
         '''
         Top level NW net class. Creates kernel, NWHead, and SupportSet as modules.
@@ -65,7 +66,6 @@ class NWNet(nn.Module):
         self.n_way = n_way
         self.debug_mode = debug_mode
         self.n_classes = n_classes
-        self.nis_scalar = nis_scalar
         self.n_shot = n_shot
         self.n_shot_random = n_shot_random
         self.n_shot_full = n_shot_full
@@ -75,11 +75,20 @@ class NWNet(nn.Module):
         self.class_dropout = class_dropout
         self.device = device
         self.return_mask = return_mask
+        self.protonet = protonet
         if support_dataset is not None:
             assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
         # Kernel
         self.kernel = get_kernel(kernel_type)
+
+        # NIS
+        if nis_type != 'none':
+            in_dim = proj_dim if proj_dim > 0 else feat_dim
+            assert in_dim is not None
+            self.nis_module = get_nis_module(nis_type, n_classes, in_dim, nis_scalar)
+        else:
+            self.nis_module = None
 
         # NW Head
         self.nwhead = NWHead(kernel=self.kernel,
@@ -87,7 +96,7 @@ class NWNet(nn.Module):
                              feat_dim=feat_dim,
                              proj_dim=proj_dim,
                              cl2n=cl2n,
-                             nis_scalar=nis_scalar,
+                             nis_module=self.nis_module,
                             )
 
         # Support dataset
@@ -107,10 +116,6 @@ class NWNet(nn.Module):
                                       n_neighbors=self.n_neighbors,
                                       env_array=self.env_array,
                                       )
-
-        # NIS
-        if self.nis_scalar:
-            self.nis_class = self.n_classes
 
     def process_support_eval(self, support_dataset):
         '''Processes support dataset into SupportSet object.'''
@@ -144,9 +149,9 @@ class NWNet(nn.Module):
         sfeat, sy = self.support_eval.get_support(mode, x=qfeat)
 
         # Add NIS class if specified
-        if self.nis_scalar:
+        if self.nis_module is not None:
             if mode == 'random':
-                n_shot = self.n_shot
+                n_shot = self.n_shot_random
             elif mode == 'full':
                 n_shot = self.n_shot_full
             elif mode == 'cluster':
@@ -154,8 +159,7 @@ class NWNet(nn.Module):
             else:
                 raise NotImplementedError # TODO
 
-            nis_class = torch.full((n_shot,), self.nis_class).to(sy.device)
-            sy = torch.cat((sy, nis_class))
+            sy = self.nis_module.add_nis_class_to_sy(sy, n_shot)
 
         if self.debug_mode:
             print('qx shape:', x.shape)
@@ -198,21 +202,36 @@ class NWNet(nn.Module):
         if sm is None:
             sm = torch.zeros_like(sy)
 
+        sx, sy, sm = sx.to(x.device), sy.to(x.device), sm.to(x.device)
+
         # Class Dropout 
         # TODO: do this without loading the data first?
         if self.class_dropout > 0:
             sx, sy, sm = self._class_dropout(y, sx, sy, sm)
 
-        # Add NIS class if specified
-        if self.nis_scalar:
-            n_shot = self.n_shot
-            nis_class = torch.full((n_shot,), self.nis_class).to(sy.device)
-            sy = torch.cat((sy, nis_class))
-
         batch_size = len(x)
         inputs = torch.cat((x, sx), dim=0)
         feats = self.featurizer(inputs)
         qfeat, sfeat = feats[:batch_size], feats[batch_size:]
+
+        if self.protonet:
+            # Compute the mean of the features per label
+            mean_features = []
+            mean_labels = []
+            for label in range(sy.max() + 1):
+                mask = sy == label
+                mean_feature = sfeat[mask].mean(dim=0)
+                mean_features.append(mean_feature)
+                mean_labels.append(label)
+
+            # Convert the lists to tensors
+            sfeat = torch.stack(mean_features).to(x.device)
+            sy = torch.tensor(mean_labels).to(x.device)
+        
+        # Add NIS class if specified
+        if self.nis_module is not None:
+            n_shot = 1 if self.protonet else self.n_shot
+            sy = self.nis_module.add_nis_class_to_sy(sy, n_shot)
         
         isin = torch.isin(y, sy)
 
@@ -237,8 +256,8 @@ class NWNet(nn.Module):
             #     plt.show()
 
         # Set query label as NIS class if not in support set
-        if self.nis_scalar:
-            y[~isin] = self.nis_class 
+        if self.nis_module is not None:
+            y[~isin] = self.nis_module.nis_class 
 
             if self.debug_mode:
                 print('qy after nis:', y)
@@ -255,7 +274,7 @@ class NWNet(nn.Module):
         probs = torch.full(unique_qy.shape, self.class_dropout)
         drop_idx = torch.nonzero(torch.bernoulli(probs)).flatten()
         drop_labels = unique_qy[drop_idx]
-        keep_idx = torch.nonzero(~torch.isin(sy, drop_labels)).flatten()
+        keep_idx = torch.nonzero(~torch.isin(sy, drop_labels)).flatten().to(sx.device)
         return sx[keep_idx], sy[keep_idx], sm[keep_idx]
 
     def _compute_all_support_feats(self):
@@ -309,7 +328,7 @@ class NWHead(nn.Module):
                  proj_dim=0, 
                  cl2n=False,
                  momentum=1.0,
-                 nis_scalar=None,
+                 nis_module=None,
                  device='cuda:0', 
                  dtype=torch.float32):
         super(NWHead, self).__init__()
@@ -319,7 +338,7 @@ class NWHead(nn.Module):
         self.proj_dim = proj_dim
         self.cl2n = cl2n
         self.momentum = momentum
-        self.nis_scalar = nis_scalar
+        self.nis_module = nis_module
 
         if self.proj_dim > 0:
             assert feat_dim is not None, 'Feature dimension must be specified'
@@ -346,7 +365,7 @@ class NWHead(nn.Module):
         :return: log of softmaxed probabilities (b, num_classes)
         """
         batch_size = len(x)
-        if self.nis_scalar is not None:
+        if self.nis_module is not None:
             sy = F.one_hot(sy, self.n_classes+1).float()
         else:
             sy = F.one_hot(sy, self.n_classes).float()
@@ -354,7 +373,7 @@ class NWHead(nn.Module):
             sx = sx[None].expand(batch_size, *sx.shape)
             sy = sy[None].expand(batch_size, *sy.shape)
 
-        x = x.unsqueeze(1)
+        x = x.unsqueeze(1) # Create num_query dimension
         if self.proj_dim > 0:
             x = self.project(x)
             sx = self.project(sx)
@@ -374,11 +393,12 @@ class NWHead(nn.Module):
 
         scores = self.kernel(x, sx)
 
-        if self.nis_scalar:
-            scores = torch.cat((scores, self.nis_scalar*torch.ones((len(scores), 1, 1)).to(scores.device)), dim=-1)
+        if self.nis_module is not None:
+            thres = self.nis_module(x)
+            scores = torch.cat((scores, thres*torch.ones((len(scores), 1, 1)).to(scores.device)), dim=-1)
 
         probs = F.softmax(scores, dim=-1)
         # (B, num_queries, num_keys) x (B, num_keys=num_vals, num_classes) -> (B, num_queries, num_classes)
         output = torch.bmm(probs, sy)
-        output = output.squeeze(1)
+        output = output.squeeze(1) # Remove num_query dimension
         return torch.log(output+1e-12)

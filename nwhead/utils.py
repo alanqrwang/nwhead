@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 import hnswlib
+from sklearn.cluster import KMeans
 
 class DatasetMetadata(Dataset):
     def __init__(self, dataset, metadata):
@@ -213,3 +214,33 @@ class HNSW:
         data = torch.cat([self.data[ind] for ind in indices], dim=0)
         labels = torch.cat([self.labels[ind] for ind in indices], dim=0)
         return data, labels
+
+def compute_clusters(embeddings, labels, n_clusters, closest=False):
+    '''Performs k-means clustering to find support set.
+    
+    :param closest: If True, uses support features closest to cluster centroids. Otherwise,
+                uses true cluster centroids.
+    '''
+    img_ids = np.arange(len(embeddings))
+    sfeat = []
+    slabel = []
+    for c in np.unique(labels):
+        embeddings_class = embeddings[labels==c]
+        img_ids_class = img_ids[labels==c]
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(embeddings_class)
+        centroids = torch.tensor(kmeans.cluster_centers_).float()
+        slabel += [c] * n_clusters 
+        if closest:
+            dist_matrix = torch.cdist(centroids, embeddings_class)
+            min_indices = dist_matrix.argmin(dim=-1)
+            dataset_indices = img_ids_class[min_indices]
+            if n_clusters == 1:
+                dataset_indices = [dataset_indices]
+            closest_embedding = embeddings[dataset_indices]
+            sfeat.append(closest_embedding)
+        else:
+            sfeat.append(centroids)
+
+    sfeat = torch.cat(sfeat, dim=0)
+    slabel = torch.tensor(slabel)
+    return sfeat, slabel
