@@ -77,6 +77,9 @@ class Parser(argparse.ArgumentParser):
                   default=0, help='p value for randomly class dropout in support')
         self.add_bool_arg('do_held_out_training', False)
         self.add_bool_arg('cl2n', False)
+        self.add_bool_arg('use_nis_embedding', False)
+        self.add_argument('--nis_scalar', type=float,
+                  default=None, help='p value for randomly class dropout in support')
 
         # Weights & Biases
         self.add_bool_arg('use_wandb', False)
@@ -175,13 +178,16 @@ def main():
         train_dataset = datasets.CIFAR10(args.data_dir, True, transform_train, download=True)
         val_dataset = datasets.CIFAR10(args.data_dir, False, transform_test, download=True)
         train_dataset.num_classes = 10
+        held_out_class = train_dataset.num_classes - 1
     elif args.dataset == 'cifar100':
         train_dataset = datasets.CIFAR100(args.data_dir, True, transform_train, download=True)
         val_dataset = datasets.CIFAR100(args.data_dir, False, transform_test, download=True)
         train_dataset.num_classes = 100
+        held_out_class = np.arange(80, 100)
     elif args.dataset == 'bird':
         train_dataset = Cub200Dataset(args.data_dir, True, transform_train)
         val_dataset = Cub200Dataset(args.data_dir, False, transform_test)
+        held_out_class = train_dataset.num_classes - 1
     elif args.dataset == 'dog':
         train_dataset = StanfordDogDataset(args.data_dir, True, transform_train)
         val_dataset = StanfordDogDataset(args.data_dir, False, transform_test)
@@ -200,7 +206,6 @@ def main():
     else:
       raise NotImplementedError()
 
-    held_out_class = train_dataset.num_classes - 1
     num_classes = train_dataset.num_classes
     train_loader, val_loader, heldout_val_loader, heldout_val_loader_nis = \
         get_fewshot_loaders(train_dataset, val_dataset, 
@@ -257,7 +262,8 @@ def main():
                         debug_mode=args.debug_mode,
                         do_held_out_training=args.do_held_out_training,
                         held_out_class=held_out_class,
-                        use_nis_embedding=True,
+                        use_nis_embedding=args.use_nis_embedding,
+                        nis_scalar=args.nis_scalar,
                         class_dropout=args.class_dropout,
                         cl2n=args.cl2n,
                         device=args.device)

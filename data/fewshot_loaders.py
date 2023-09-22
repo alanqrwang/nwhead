@@ -67,11 +67,14 @@ class HeldOutSampler(torch.utils.data.Sampler):
         y_array = dataset.targets
 
         self.indices = get_separated_indices(y_array)
+        if isinstance(held_out_class, int):
+            held_out_class = [held_out_class]
         if heldout:
-            self.indices = self.indices[held_out_class]
+            self.indices = [self.indices[i] for i in held_out_class]
         else:
-            del self.indices[held_out_class]
-            self.indices = [l for sublist in self.indices for l in sublist]
+            print(len(self.indices), held_out_class)
+            self.indices = [row for i, row in enumerate(self.indices) if i not in held_out_class]
+        self.indices = [l for sublist in self.indices for l in sublist]
         
         if shuffle:
             np.random.shuffle(self.indices)
