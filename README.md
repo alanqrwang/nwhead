@@ -144,13 +144,23 @@ python train.py \
   --dataset bird  \ # Dataset to use
   --arch resnet18 \ # Feature extractor, $g_\theta$ in paper
   --train_method nwhead \ # Model to train, choose from [fchead, nwhead]
-  --batch_size 32 \
-  --lr 1e-3 \
+  --batch_size 8 \
+  --lr 1e-2 \
   --num_epochs 1000 \
   --scheduler_milestones 500 750 \ # Epoch milestones to decrease lr via scheduler
+  --n_way 10 # Use to limit number of classes in support for computational efficiency
 ```
 This script will train for 1000 epochs and perform evaluation at the end of each epoch using random, full, and cluster inference modes.
 Optionally, toggle the `--use_wandb` flag to log training results to Weights & Biases.
+
+## Invariant Representation Learning with NW Head
+The code supports learning invariant representations across different environments by conditioning the support set on a single environment during training. 
+![NWIRM](figs/nwirm_arch.png)
+To achieve this, specify ``--train_type irm`` in the script.
+Datasets must have additional metadata representing which environment each image originates from.
+This can be accomplished in 2 ways:
+1. Pass an ``env_array`` variable to ``NWNet`` which is a 1d environment indicator array of same length as the training set.
+2. Pass a ``support_dataset`` to ``NWNet`` which is a list of separate Pytorch datasets, where each dataset is composed of data from a single environment.
 
 ## Requirements
 This code was run and tested on an Nvidia A6000 GPU with the following dependencies:
@@ -160,7 +170,7 @@ This code was run and tested on an Nvidia A6000 GPU with the following dependenc
 + numpy 1.21.5
 
 ## Citation
-If you use NW head or some part of the code, please cite:
+If you use NW head or some part of the code, please consider citing:
 
 Alan Q. Wang and Mert R. Sabuncu, "A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification" (TMLR 2023)
 ```
@@ -172,5 +182,18 @@ Alan Q. Wang and Mert R. Sabuncu, "A Flexible Nadaraya-Watson Head Can Offer Exp
     issn={2835-8856},
     year={2022},
     url={https://openreview.net/forum?id=iEq6lhG4O3},
+}
+```
+
+For code related to invariant representation learning with NW head, please consider citing:
+
+Alan Q. Wang, Minh Nguyen, and Mert R. Sabuncu, "Learning Invariant Representations with a Nonparametric Nadaraya-Watson Head" (NeurIPS 2023)
+```
+@article{
+    wang2023nwheadirm,
+    title={Learning Invariant Representations with a Nonparametric Nadaraya-Watson Head},
+    author={Alan Q. Wang and Minh Nguyen and Mert R. Sabuncu},
+    journal={NeurIPS},
+    year={2023},
 }
 ```

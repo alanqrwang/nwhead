@@ -65,10 +65,10 @@ class Parser(argparse.ArgumentParser):
                   help='Kernel type')
         self.add_argument('--proj_dim', type=int,
                   default=0)
-        self.add_argument('--supp_num_per_class', type=int,
-                  default=1)
-        self.add_argument('--subsample_classes', type=int,
-                  default=None, help='size of subsample sampler')
+        self.add_argument('--n_shot', type=int,
+                  default=1, help='Number of examples per class in support')
+        self.add_argument('--n_way', type=int,
+                  default=None, help='Number of training classes per query in support')
 
         # Weights & Biases
         self.add_bool_arg('use_wandb', False)
@@ -87,15 +87,15 @@ class Parser(argparse.ArgumentParser):
     def parse(self):
         args = self.parse_args()
         args.run_dir = os.path.join(args.models_dir,
-                      'method{method}_dataset{dataset}_arch{arch}_lr{lr}_bs{batch_size}_projdim{proj_dim}_numsupp{numsupp}_subsample{subsample}_wd{wd}_seed{seed}'.format(
+                      'method{method}_dataset{dataset}_arch{arch}_lr{lr}_bs{batch_size}_projdim{proj_dim}_nshot{nshot}_nway{nway}_wd{wd}_seed{seed}'.format(
                         method=args.train_method,
                         dataset=args.dataset,
                         arch=args.arch,
                         lr=args.lr,
                         batch_size=args.batch_size,
                         proj_dim=args.proj_dim,
-                        numsupp=args.supp_num_per_class,
-                        subsample=args.subsample_classes,
+                        nshot=args.n_shot,
+                        nway=args.n_way,
                         wd=args.weight_decay,
                         seed=args.seed
                       ))
@@ -228,10 +228,10 @@ def main():
                         num_classes,
                         support_dataset=train_dataset,
                         feat_dim=feat_dim,
-                        kernel_type=args.kernel_type,
-                        num_per_class=args.supp_num_per_class,
-                        subsample_classes=args.subsample_classes,
                         proj_dim=args.proj_dim,
+                        kernel_type=args.kernel_type,
+                        n_shot=args.n_shot,
+                        n_way=args.n_way,
                         debug_mode=args.debug_mode)
     else:
         raise NotImplementedError()
@@ -289,12 +289,16 @@ def main():
         if args.train_method == 'nwhead':
             network.eval()
             network.precompute()
+            print('Evaluating on random mode...')
             eval_epoch(val_loader, network, criterion, optimizer, args, mode='random')
+            print('Evaluating on full mode...')
             acc1 = eval_epoch(val_loader, network, criterion, optimizer, args, mode='full')
+            print('Evaluating on cluster mode...')
             eval_epoch(val_loader, network, criterion, optimizer, args, mode='cluster')
         else:
             acc1 = eval_epoch(val_loader, network, criterion, optimizer, args)
 
+        print('Training...')
         train_epoch(train_loader, network, criterion, optimizer, args)
         scheduler.step()
 

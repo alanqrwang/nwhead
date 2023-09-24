@@ -71,22 +71,13 @@ class SupportSetTrain(SupportSet):
         self.n_way = n_way
         self.train_iter = self._build_iter()
 
-    def get_support(self, y, env_index):
+    def get_support(self, y):
         '''Samples a support for training.'''
-        if self.train_type == 'mixmatch':
+        if self.train_type == 'irm':
             train_iter = np.random.choice(self.train_iter)
-            sx, sy, sm = train_iter.next()
-        elif self.train_type == 'match':
-            assert torch.equal(env_index, torch.ones_like(env_index)*env_index[0])
-            meta_idx = self.env_map[env_index[0].item()]
-            train_iter = self.train_iter[meta_idx]
             sx, sy, sm = train_iter.next()
         else:
             sx, sy, sm = self.train_iter.next(y)
-
-        # Occasionally verify sampled classes
-        if random.random() < 0.01:
-            self._verify_sy(sy)
 
         return sx, sy, sm
 
@@ -100,13 +91,6 @@ class SupportSetTrain(SupportSet):
         else:
             train_iter = [iter(InfiniteUniformClassLoader(env, self.n_shot)) for env in self.env_datasets]
         return train_iter
-
-    def _verify_sy(self, sy):
-        if self.train_type == 'unbalanced':
-            pass
-        unique_labels, counts = torch.unique(sy, return_counts=True)
-        assert torch.equal(unique_labels, torch.arange(self.n_classes))
-        assert torch.equal(counts, torch.ones_like(unique_labels) * self.n_shot) 
 
 class SupportSetEval(SupportSet):
     '''Support set for NW evaluation.'''
