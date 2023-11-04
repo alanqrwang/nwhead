@@ -172,7 +172,7 @@ This code was run and tested on an Nvidia A6000 GPU with the following dependenc
 ## Citation
 If you use NW head or some part of the code, please consider citing:
 
-Alan Q. Wang and Mert R. Sabuncu, "A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification" (TMLR 2023)
+Alan Q. Wang and Mert R. Sabuncu, "[A Flexible Nadaraya-Watson Head Can Offer Explainable and Calibrated Classification](https://arxiv.org/abs/2212.03411)" (TMLR 2023)
 ```
 @article{
     wang2022nwhead,
@@ -187,7 +187,7 @@ Alan Q. Wang and Mert R. Sabuncu, "A Flexible Nadaraya-Watson Head Can Offer Exp
 
 For code related to invariant representation learning with NW head, please consider citing:
 
-Alan Q. Wang, Minh Nguyen, and Mert R. Sabuncu, "Learning Invariant Representations with a Nonparametric Nadaraya-Watson Head" (NeurIPS 2023)
+Alan Q. Wang, Minh Nguyen, and Mert R. Sabuncu, "[Learning Invariant Representations with a Nonparametric Nadaraya-Watson Head](https://arxiv.org/abs/2309.13377)" (NeurIPS 2023)
 ```
 @article{
     wang2023nwheadirm,
