@@ -6,7 +6,7 @@ Repository containing training and evaluation code for the NW head - an interpre
 ## NW Head
 The NW head module is in `nwhead/nw.py`.
 In its simplest form, the NW head code is:
-```
+```python
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,7 +36,7 @@ The submodule in `nwhead/` is designed to be portable, so that it can be inserte
 An example of usage can be found in `train.py`.
 For example, to train an NW head with ResNet-18 backbone:
 
-```
+```python
 import torch
 from nwhead.nw import NWNet
 
@@ -45,7 +45,6 @@ train_dataset = ...
 val_dataset = ...
 train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=batch_size, shuffle=True)
-
 val_loader = torch.utils.data.DataLoader(
     val_dataset, batch_size=batch_size, shuffle=False)
 num_classes = train_dataset.num_classes
@@ -79,7 +78,7 @@ for img, label in train_loader:
 ```
 To perform evaluation, use the `predict()` method and pass in your desired inference mode.
 Make sure to call `precompute()` beforehand.
-```
+```python
 network.eval()
 network.precompute()
 mode = 'full'
@@ -136,21 +135,31 @@ This figure shows results of ranking support images using support influence by m
 ![Influences](figs/influence.png)
 
 ## Training
-Example command for training NW head:
-```
+Example command for training NW head.
+This script will train for 1000 epochs and perform evaluation at the end of each epoch using random, full, and cluster inference modes.
+```bash
 python train.py \
-  --models_dir out/ \ # Directory to save model outputs
-  --data_dir ... \ # Directory where dataset lives
-  --dataset bird  \ # Dataset to use
-  --arch resnet18 \ # Feature extractor, $g_\theta$ in paper
-  --train_method nwhead \ # Model to train, choose from [fchead, nwhead]
+  --models_dir out/ \
+  --data_dir /path/to/CUB_200_2011 \
+  --dataset bird \
+  --arch resnet18 \
+  --train_method nwhead \
   --batch_size 8 \
   --lr 1e-2 \
   --num_epochs 1000 \
-  --scheduler_milestones 500 750 \ # Epoch milestones to decrease lr via scheduler
-  --n_way 10 # Use to limit number of classes in support for computational efficiency
+  --scheduler_milestones 500 750 \
+  --n_way 10
 ```
-This script will train for 1000 epochs and perform evaluation at the end of each epoch using random, full, and cluster inference modes.
+
+Description of important flags:
++ `--models_dir`: Directory to save model outputs.
++ `--data_dir`: Directory where dataset lives.
++ `--dataset`: Dataset to use. 
++ `--arch`: Feature extractor architecture, $g_\theta$ in paper.
++ `--train_method`: Model to train, choose from [fchead, nwhead]
++ `--scheduler_milestones`: Epoch milestones to decrease lr via scheduler
++ `--n_way`: Number of classes in support set during training. Use to limit number of classes in support for computational efficiency.
+
 Optionally, toggle the `--use_wandb` flag to log training results to Weights & Biases.
 
 ## Invariant Representation Learning with NW Head

@@ -3,9 +3,6 @@ import torch.nn.functional as F
 import torch.nn as nn
 from .support import SupportSetTrain, SupportSetEval
 from .kernel import get_kernel
-from .utils import linear_normalization
-from torch.nn.init import xavier_uniform_
-
 try:
     import matplotlib.pyplot as plt
 except ImportError:
@@ -51,7 +48,7 @@ class NWNet(nn.Module):
         :param n_clusters: Number of cluster centroids per class for cluster inference
         :param n_neighbors: Number of neighbors for knn or hnsw inference
         :param env_array: Array of same length as support dataset containing integer
-            environment indicators
+            environment indicators (only use for IRM training)
         :param debug_mode: If true, prints some debugging info and plots images
         :param device: Device used for computation
         :param return_mask: If true, returns mask of same size as batch_size indicating
@@ -74,14 +71,19 @@ class NWNet(nn.Module):
         if support_dataset is not None:
             assert hasattr(support_dataset, 'targets'), 'Support set must have .targets attribute'
 
+        if proj_dim > 0:
+            assert feat_dim is not None, 'Feature dimension must be specified'
+            self.featurizer = nn.Sequential(
+                self.featurizer,
+                nn.Linear(feat_dim, proj_dim)
+            )
+
         # Kernel
         self.kernel = get_kernel(kernel_type)
 
         # NW Head
         self.nwhead = NWHead(kernel=self.kernel,
                              n_classes=n_classes,
-                             feat_dim=feat_dim,
-                             proj_dim=proj_dim,
                             )
 
         # Support dataset
@@ -255,24 +257,11 @@ class NWHead(nn.Module):
     def __init__(self, 
                  kernel, 
                  n_classes,
-                 feat_dim=None,
-                 proj_dim=0, 
-                 device='cuda:0', 
-                 dtype=torch.float32):
+                 ):
         super(NWHead, self).__init__()
-        factory_kwargs = {'device': device, 'dtype': dtype}
         self.kernel = kernel
         self.n_classes = n_classes
-        self.proj_dim = proj_dim
 
-        if self.proj_dim > 0:
-            assert feat_dim is not None, 'Feature dimension must be specified'
-            self.proj_weight = nn.Parameter(torch.empty((1, feat_dim, proj_dim), **factory_kwargs))
-            xavier_uniform_(self.proj_weight)
-
-    def project(self, x):
-        bs = len(x)
-        return torch.bmm(x, self.proj_weight.repeat(bs, 1, 1))
 
     def forward(self, x, sx, sy):
         """
@@ -290,9 +279,6 @@ class NWHead(nn.Module):
             sy = sy[None].expand(batch_size, *sy.shape)
 
         x = x.unsqueeze(1) # Create num_query dimension
-        if self.proj_dim > 0:
-            x = self.project(x)
-            sx = self.project(sx)
 
         scores = self.kernel(x, sx)
 
