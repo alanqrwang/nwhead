@@ -29,8 +29,6 @@ class CosineDistance(nn.Module):
 
 class DotProduct(nn.Module):
     def forward(self, x, y):
-        x = F.normalize(x, dim=-1)
-        y = F.normalize(y, dim=-1)
         # (B, num_queries, embed_dim) x (B, embed_dim, num_keys) -> (B, num_queries, num_keys)
         return torch.bmm(x, y.transpose(-2, -1))
 
